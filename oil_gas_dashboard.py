@@ -4,10 +4,9 @@ oil_gas_research.py
 Global Crude Oil & Natural Gas — Research Dashboard
 ═══════════════════════════════════════════════════════════════
 Data Sources:
-  • Yahoo Finance   — OHLCV futures & ETFs  (no key required)
-  • FRED            — Macro indicators       (free key: fred.stlouisfed.org)
-  • Alpha Vantage   — Commodity series       (free key: alphavantage.co)
-  • NewsAPI         — Geopolitical news      (free key: newsapi.org)
+  • Yahoo Finance   — OHLCV futures, ETFs & commodity history (no key)
+  • FRED            — Macro indicators  (free key: fred.stlouisfed.org)
+  • RSS Feeds       — Reuters, BBC, Al Jazeera energy news    (no key)
 
 Run locally:
   pip install -r requirements.txt
@@ -15,8 +14,6 @@ Run locally:
 
 Streamlit Cloud — add to .streamlit/secrets.toml:
   FRED_KEY = "your_key"
-  AV_KEY   = "your_key"
-  NEWS_KEY = "your_key"
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -29,6 +26,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 # ═══════════════════════════════════════════════════════════════
@@ -55,12 +53,17 @@ FRED_SERIES = {
     "US Petroleum Consumption": "TOTALNSA",
 }
 
-ALPHA_SERIES = {
-    "Brent Crude (Monthly)":  ("BRENT",       "monthly"),
-    "WTI Crude (Monthly)":    ("WTI",          "monthly"),
-    "Natural Gas (Monthly)":  ("NATURAL_GAS",  "monthly"),
-    "Copper (Monthly)":       ("COPPER",       "monthly"),
-    "Aluminum (Monthly)":     ("ALUMINUM",     "monthly"),
+COMMODITY_TICKERS = {
+    "WTI Crude Oil (CL=F)":      "CL=F",
+    "Brent Crude Oil (BZ=F)":    "BZ=F",
+    "Natural Gas (NG=F)":        "NG=F",
+    "RBOB Gasoline (RB=F)":      "RB=F",
+    "Heating Oil (HO=F)":        "HO=F",
+    "Copper (HG=F)":             "HG=F",
+    "Gold (GC=F)":               "GC=F",
+    "US Oil ETF (USO)":          "USO",
+    "Natural Gas ETF (UNG)":     "UNG",
+    "Energy Sector ETF (XLE)":   "XLE",
 }
 
 GEO_EVENTS = [
@@ -371,26 +374,22 @@ def fetch_fred_multi(series_ids: list, api_key: str, start: str = "2015-01-01") 
     }
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_alpha_commodity(commodity: str, interval: str, api_key: str) -> dict:
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_commodity_history(tickers: list, period: str = "5y") -> dict:
+    """Fetch multi-commodity price history via Yahoo Finance — no key needed."""
     try:
-        r = requests.get(
-            "https://www.alphavantage.co/query",
-            params={"function": commodity, "interval": interval, "apikey": api_key},
-            timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if "data" not in data:
-            return {"ok": False, "error": data.get("Note") or data.get("Information") or "Unknown", "df": pd.DataFrame()}
-        df = pd.DataFrame(data["data"])
-        df["date"] = pd.to_datetime(df["date"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna().set_index("date").sort_index()
-        df.columns = [commodity]
+        raw = yf.download(tickers, period=period, auto_adjust=True, progress=False)
+        if raw.empty:
+            return {"ok": False, "error": "No data returned", "df": pd.DataFrame()}
+        df = raw["Close"].dropna(how="all") if isinstance(raw.columns, pd.MultiIndex) \
+             else raw[["Close"]].rename(columns={"Close": tickers[0]})
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        # Rename columns to friendly labels
+        label_map = {v: k for k, v in COMMODITY_TICKERS.items()}
+        df = df.rename(columns=label_map)
         return {
-            "ok": True, "df": df, "commodity": commodity,
-            "source": "Alpha Vantage",
+            "ok": True, "df": df,
+            "source": "Yahoo Finance (no key required)",
             "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
             "rows": len(df),
         }
@@ -398,37 +397,102 @@ def fetch_alpha_commodity(commodity: str, interval: str, api_key: str) -> dict:
         return {"ok": False, "error": str(e), "df": pd.DataFrame()}
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(api_key: str, query: str = "oil gas energy OPEC crude", days_back: int = 30) -> dict:
-    try:
-        r = requests.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": query,
-                "from": (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d"),
-                "sortBy": "publishedAt", "language": "en", "pageSize": 50, "apiKey": api_key,
-            },
-            timeout=10,
-        )
-        r.raise_for_status()
-        articles = r.json().get("articles", [])
-        if not articles:
-            return {"ok": False, "error": "No articles found", "articles": []}
-        cleaned = [{
-            "date": pd.to_datetime(a.get("publishedAt", "")).strftime("%Y-%m-%d") if a.get("publishedAt") else "",
-            "title": a.get("title", ""),
-            "source": a.get("source", {}).get("name", ""),
-            "url": a.get("url", ""),
-            "description": a.get("description", ""),
-        } for a in articles]
-        return {
-            "ok": True, "articles": cleaned,
-            "source": "NewsAPI",
-            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            "count": len(cleaned),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e), "articles": []}
+# ── RSS Energy News (no API key) ─────────────────────────────
+RSS_FEEDS = {
+    "Reuters Energy":      "https://feeds.reuters.com/reuters/businessNews",
+    "BBC Business":        "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "Al Jazeera Econ":     "https://www.aljazeera.com/xml/rss/all.xml",
+    "Oil Price News":      "https://oilprice.com/rss/main",
+    "Rigzone":             "https://www.rigzone.com/news/rss/rigzone_latest.aspx",
+}
+
+ENERGY_KEYWORDS = {
+    "crude","oil","opec","brent","wti","refinery","petroleum","barrel","lng",
+    "natural gas","pipeline","energy","gasoline","diesel","fuel","offshore",
+    "saudi","aramco","exxon","chevron","bp ","shell","iran","iraq","russia",
+    "shale","sanctions","tanker","supply","production cut","geopolit",
+}
+
+@st.cache_data(ttl=900, show_spinner=False)  # 15-min cache
+def fetch_rss_news() -> dict:
+    """Fetch and merge energy-relevant articles from multiple RSS feeds. No key needed."""
+    articles = []
+    sources_ok, sources_fail = [], []
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; OilGasResearchBot/1.0)"}
+
+    for feed_name, url in RSS_FEEDS.items():
+        try:
+            r = requests.get(url, timeout=8, headers=headers)
+            r.raise_for_status()
+            root = ET.fromstring(r.content)
+
+            # Handle both RSS 2.0 and Atom
+            items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
+            for item in items[:30]:
+                def _t(tag, atom_tag=None):
+                    node = item.find(tag)
+                    if node is None and atom_tag:
+                        node = item.find(atom_tag)
+                    return (node.text or "").strip() if node is not None else ""
+
+                title = _t("title", "{http://www.w3.org/2005/Atom}title")
+                desc  = _t("description", "{http://www.w3.org/2005/Atom}summary")
+                link  = _t("link", "{http://www.w3.org/2005/Atom}id")
+                pub   = _t("pubDate", "{http://www.w3.org/2005/Atom}updated")
+
+                # Energy keyword filter
+                combined = (title + " " + desc).lower()
+                if not any(kw in combined for kw in ENERGY_KEYWORDS):
+                    continue
+
+                # Parse date
+                date_str = ""
+                for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S %Z",
+                            "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z"):
+                    try:
+                        date_str = datetime.strptime(pub.strip(), fmt).strftime("%Y-%m-%d")
+                        break
+                    except Exception:
+                        continue
+
+                articles.append({
+                    "date":        date_str or pub[:10],
+                    "title":       title,
+                    "description": desc[:260] + "…" if len(desc) > 260 else desc,
+                    "source":      feed_name,
+                    "url":         link,
+                })
+
+            sources_ok.append(feed_name)
+
+        except Exception as e:
+            sources_fail.append(f"{feed_name}: {e}")
+
+    if not articles:
+        return {"ok": False, "error": "No energy articles found across all feeds",
+                "articles": [], "sources_ok": sources_ok, "sources_fail": sources_fail}
+
+    # De-duplicate by title similarity & sort newest first
+    seen, unique = set(), []
+    for a in articles:
+        key = a["title"][:60].lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(a)
+
+    unique.sort(key=lambda x: x["date"], reverse=True)
+
+    return {
+        "ok": True,
+        "articles": unique,
+        "count": len(unique),
+        "source": "RSS: " + ", ".join(sources_ok),
+        "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "sources_ok": sources_ok,
+        "sources_fail": sources_fail,
+    }
 
 # ═══════════════════════════════════════════════════════════════
 # ANALYSIS FUNCTIONS
@@ -467,8 +531,6 @@ def backtest_ma_crossover(series: pd.Series, fast: int = 20, slow: int = 50) -> 
 #   NEWS_KEY = "..."   → newsapi.org/register
 # ═══════════════════════════════════════════════════════════════
 fred_key = st.secrets.get("FRED_KEY", "") if hasattr(st, "secrets") else ""
-av_key   = st.secrets.get("AV_KEY",   "") if hasattr(st, "secrets") else ""
-news_key = st.secrets.get("NEWS_KEY", "") if hasattr(st, "secrets") else ""
 
 # ═══════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -502,15 +564,11 @@ with st.sidebar:
     slow_ma     = st.slider("Slow MA (days)", 20, 200, 50)
     corr_window = st.slider("Correlation Window (days)", 20, 120, 60)
 
-    st.markdown("<div class='sh'>📰 News Filter</div>", unsafe_allow_html=True)
-    news_query = st.text_input("Search terms", "oil gas OPEC crude energy")
-    news_days  = st.slider("Days back", 7, 90, 30)
-
     st.markdown("---")
     st.markdown("""
     <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#1a2a40;text-align:center;'>
-        YAHOO FINANCE · NO KEY REQUIRED<br>FRED · AV · NEWSAPI · FREE TIERS<br>
-        CACHE: 5min PRICES · 1hr MACRO
+        YAHOO FINANCE · NO KEY REQUIRED<br>FRED · FREE TIER · RSS FEEDS · NO KEY<br>
+        CACHE: 5min PRICES · 15min NEWS · 1hr MACRO
     </div>""", unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════
@@ -568,7 +626,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 (tab_price, tab_vol, tab_corr, tab_bt,
  tab_macro, tab_av, tab_map, tab_news) = st.tabs([
     "📈 Price & OHLCV", "📊 Volatility", "🔗 Correlations", "⚙️ Backtesting",
-    "🌍 Macro & FRED",  "🛢️ AV Commodities", "🏭 Facility Map", "📰 Geopolitical",
+    "🌍 Macro & FRED",  "📦 Commodities", "🏭 Facility Map", "📰 Geopolitical",
 ])
 
 # ╔══════════════════════════════════════════════╗
@@ -882,46 +940,114 @@ with tab_macro:
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 6 · ALPHA VANTAGE COMMODITIES          ║
 # ╚══════════════════════════════════════════════╝
+# ╔══════════════════════════════════════════════╗
+# ║  TAB 6 · COMMODITIES (Yahoo Finance)        ║
+# ╚══════════════════════════════════════════════╝
 with tab_av:
-    st.markdown("<div class='sh'>Commodity Price Series — Alpha Vantage</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sh'>Live Commodity Prices — Yahoo Finance</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='prov'>▸ Yahoo Finance · No API key required · Prices delayed ~15 min · Cached 5 min</div>",
+        unsafe_allow_html=True,
+    )
 
-    if not av_key:
-        st.markdown("""<div class='info-box'>
-        Enter your <b>Alpha Vantage API key</b> in the sidebar.<br>
-        Free key: <a href='https://www.alphavantage.co/support/#api-key' style='color:#e8a020;'>alphavantage.co</a>
-        </div>""", unsafe_allow_html=True)
+    # ── Selector ────────────────────────────────────────────────
+    com1, com2 = st.columns([3, 1])
+    with com1:
+        selected_com = st.multiselect(
+            "Select commodities",
+            list(COMMODITY_TICKERS.keys()),
+            default=["WTI Crude Oil (CL=F)", "Brent Crude Oil (BZ=F)",
+                     "Natural Gas (NG=F)", "RBOB Gasoline (RB=F)", "Heating Oil (HO=F)"],
+        )
+    with com2:
+        com_period = st.selectbox("History", ["1y","2y","5y","10y"], index=2, key="com_period")
+
+    if not selected_com:
+        st.info("Select at least one commodity above.")
     else:
-        selected_av = st.multiselect("Select Commodities", list(ALPHA_SERIES.keys()),
-                                     default=["Brent Crude (Monthly)","Natural Gas (Monthly)"])
-        if selected_av:
-            frames = []
-            for label in selected_av:
-                func, interval = ALPHA_SERIES[label]
-                with st.spinner(f"Fetching {label}…"):
-                    res = fetch_alpha_commodity(func, interval, av_key)
-                if res["ok"]:
-                    prov_tag(res)
-                    frames.append(res["df"].rename(columns={func: label}))
-                else:
-                    err_box(f"{label}: {res.get('error','')}")
-            if frames:
-                av_df = pd.concat(frames, axis=1).sort_index()
-                fig_av = go.Figure()
-                for i, col in enumerate(av_df.columns):
-                    fig_av.add_trace(go.Scatter(x=av_df.index, y=av_df[col], name=col,
-                                                line=dict(color=COLORS[i % len(COLORS)], width=1.8)))
-                apply_theme(fig_av, "Alpha Vantage — Commodity Prices (Monthly)", height=380)
-                st.plotly_chart(fig_av, use_container_width=True)
+        syms = [COMMODITY_TICKERS[k] for k in selected_com]
+        with st.spinner("Fetching commodity data…"):
+            com_res = fetch_commodity_history(syms, period=com_period)
 
-                yoy = av_df.pct_change(12) * 100
-                fig_yoy = go.Figure()
-                for i, col in enumerate(yoy.columns):
-                    fig_yoy.add_trace(go.Scatter(x=yoy.index, y=yoy[col], name=col,
-                                                 line=dict(color=COLORS[i % len(COLORS)], width=1.6)))
-                fig_yoy.add_hline(y=0, line_dash="dot", line_color=rgba(PALETTE["white"], 0.15))
-                apply_theme(fig_yoy, "Year-on-Year Change (%)", height=300)
-                st.plotly_chart(fig_yoy, use_container_width=True)
-                dl_button(av_df.reset_index(), "alpha_vantage_commodities.csv")
+        if not com_res["ok"]:
+            err_box(com_res.get("error", "Fetch failed"))
+        else:
+            cdf = com_res["df"][[c for c in selected_com if c in com_res["df"].columns]]
+
+            # ── Live snapshot KPI row ────────────────────────────────
+            kpi_cols = st.columns(min(len(selected_com), 5))
+            for i, col in enumerate(cdf.columns[:5]):
+                last_v = cdf[col].dropna().iloc[-1]
+                prev_v = cdf[col].dropna().iloc[-2]
+                delta  = last_v - prev_v
+                kpi_cols[i].metric(col.split("(")[0].strip(), f"{last_v:.2f}", f"{delta:+.3f}")
+
+            # ── Normalised price chart ──────────────────────────────
+            norm = cdf / cdf.iloc[0] * 100
+            fig_com = go.Figure()
+            for i, col in enumerate(norm.columns):
+                fig_com.add_trace(go.Scatter(
+                    x=norm.index, y=norm[col], name=col.split("(")[0].strip(),
+                    line=dict(color=COLORS[i % len(COLORS)], width=1.8),
+                ))
+            fig_com.add_hline(y=100, line_dash="dot", line_color=rgba(PALETTE["white"], 0.12))
+            apply_theme(fig_com, f"Normalised Commodity Prices — Base 100 ({com_period})", height=380)
+            st.plotly_chart(fig_com, use_container_width=True)
+
+            # ── Raw price chart ─────────────────────────────────────
+            st.markdown("<div class='sh'>Absolute Prices</div>", unsafe_allow_html=True)
+            fig_raw = go.Figure()
+            for i, col in enumerate(cdf.columns):
+                fig_raw.add_trace(go.Scatter(
+                    x=cdf.index, y=cdf[col], name=col.split("(")[0].strip(),
+                    line=dict(color=COLORS[i % len(COLORS)], width=1.6),
+                ))
+            apply_theme(fig_raw, "Commodity Prices (USD)", height=340)
+            st.plotly_chart(fig_raw, use_container_width=True)
+
+            # ── Rolling 30d volatility ──────────────────────────────
+            st.markdown("<div class='sh'>30-Day Annualised Volatility (%)</div>", unsafe_allow_html=True)
+            fig_vol = go.Figure()
+            for i, col in enumerate(cdf.columns):
+                rv = cdf[col].pct_change().rolling(30).std() * np.sqrt(252) * 100
+                fig_vol.add_trace(go.Scatter(
+                    x=rv.index, y=rv, name=col.split("(")[0].strip(),
+                    line=dict(color=COLORS[i % len(COLORS)], width=1.5),
+                ))
+            apply_theme(fig_vol, "Rolling Volatility", height=280)
+            st.plotly_chart(fig_vol, use_container_width=True)
+
+            # ── YoY returns heatmap ─────────────────────────────────
+            st.markdown("<div class='sh'>Year-on-Year Return (%)</div>", unsafe_allow_html=True)
+            yoy = cdf.pct_change(252) * 100
+            fig_yoy = go.Figure()
+            for i, col in enumerate(yoy.columns):
+                fig_yoy.add_trace(go.Scatter(
+                    x=yoy.index, y=yoy[col], name=col.split("(")[0].strip(),
+                    line=dict(color=COLORS[i % len(COLORS)], width=1.5),
+                ))
+            fig_yoy.add_hline(y=0, line_dash="dot", line_color=rgba(PALETTE["white"], 0.15))
+            apply_theme(fig_yoy, "YoY Return (%)", height=280)
+            st.plotly_chart(fig_yoy, use_container_width=True)
+
+            # ── Correlation heatmap ─────────────────────────────────
+            if len(cdf.columns) > 1:
+                st.markdown("<div class='sh'>Commodity Correlation Matrix</div>", unsafe_allow_html=True)
+                short_names = [c.split("(")[0].strip() for c in cdf.columns]
+                corr = cdf.rename(columns=dict(zip(cdf.columns, short_names))).pct_change().dropna().corr()
+                hm = go.Figure(go.Heatmap(
+                    z=corr.values, x=corr.columns.tolist(), y=corr.index.tolist(),
+                    colorscale=[[0,"#0d2040"],[0.5,"#1a4080"],[1,"#e8a020"]],
+                    zmin=-1, zmax=1,
+                    text=corr.round(2).astype(str).values, texttemplate="%{text}", showscale=True,
+                ))
+                apply_theme(hm, "Daily Return Correlation", height=360,
+                            margin=dict(l=120, r=20, t=40, b=80))
+                hm.update_xaxes(tickangle=-30, tickfont=dict(size=9))
+                hm.update_yaxes(tickfont=dict(size=9))
+                st.plotly_chart(hm, use_container_width=True)
+
+            dl_button(cdf.reset_index(), f"commodities_{com_period}.csv")
 
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 7 · FACILITY MAP                       ║
@@ -1269,15 +1395,37 @@ with tab_map:
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 8 · GEOPOLITICAL NEWS                  ║
 # ╚══════════════════════════════════════════════╝
+# ╔══════════════════════════════════════════════╗
+# ║  TAB 8 · GEOPOLITICAL (Live RSS)            ║
+# ╚══════════════════════════════════════════════╝
 with tab_news:
-    st.markdown("<div class='sh'>Geopolitical & Market News</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sh'>Live Energy & Geopolitical News</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='prov'>▸ Reuters · BBC · Al Jazeera · OilPrice.com · Rigzone · No API key · Cached 15 min</div>",
+        unsafe_allow_html=True,
+    )
 
-    if not news_key:
-        st.markdown("""<div class='info-box'>
-        Enter your <b>NewsAPI key</b> in the sidebar for live articles.<br>
-        Free key (100 req/day): <a href='https://newsapi.org/register' style='color:#e8a020;'>newsapi.org</a>
-        </div>""", unsafe_allow_html=True)
-        st.markdown("<div class='sh'>Key Geopolitical Events — Oil Price Impact</div>", unsafe_allow_html=True)
+    with st.spinner("Fetching live news feeds…"):
+        news_res = fetch_rss_news()
+
+    # ── Feed health status ───────────────────────────────────────
+    if news_res.get("sources_ok") or news_res.get("sources_fail"):
+        health_parts = []
+        for s in news_res.get("sources_ok", []):
+            health_parts.append(f"<span style='color:#40b860'>✓ {s}</span>")
+        for s in news_res.get("sources_fail", []):
+            short = s.split(":")[0]
+            health_parts.append(f"<span style='color:#e05050'>✗ {short}</span>")
+        st.markdown(
+            "<div style='font-family:Space Mono,monospace;font-size:0.58rem;margin-bottom:10px;'>"
+            + " &nbsp;·&nbsp; ".join(health_parts) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    if not news_res["ok"]:
+        err_box(news_res.get("error", "All RSS feeds failed"))
+        # ── Static curated fallback ──────────────────────────────
+        st.markdown("<div class='sh'>Key Geopolitical Events — Historical Log</div>", unsafe_allow_html=True)
         for date, desc, dot in GEO_EVENTS:
             st.markdown(f"""
             <div class='news-card'>
@@ -1285,42 +1433,70 @@ with tab_news:
                 <div class='news-meta'>📅 {date} · Geopolitical Event Log</div>
             </div>""", unsafe_allow_html=True)
     else:
-        with st.spinner("Fetching energy news…"):
-            news_res = fetch_news(news_key, query=news_query, days_back=news_days)
-        if news_res["ok"]:
-            st.markdown(
-                f"<div class='prov'>▸ {news_res['source']} · {news_res['fetched_at']} · {news_res['count']} articles</div>",
-                unsafe_allow_html=True,
-            )
-            if bench_res["ok"]:
-                bdf        = bench_res["df"]
-                news_dates = list({a["date"] for a in news_res["articles"] if a["date"]})
-                fig_n = go.Figure()
-                fig_n.add_trace(go.Scatter(x=bdf.index, y=bdf["Close"], name="Price",
-                                           line=dict(color=PALETTE["WTI"], width=1.8)))
-                for date_str in news_dates:
-                    try:
-                        idx = bdf.index.asof(pd.to_datetime(date_str))
-                        if pd.notna(idx) and idx in bdf.index:
-                            fig_n.add_vline(x=idx, line_color=rgba(PALETTE["NatGas"], 0.25),
-                                            line_width=1, line_dash="dot")
-                    except Exception:
-                        pass
-                apply_theme(fig_n, f"{bench_ticker} with News Event Markers", height=280)
-                st.plotly_chart(fig_n, use_container_width=True)
+        articles = news_res["articles"]
 
-            st.markdown("<div class='sh'>Latest Articles</div>", unsafe_allow_html=True)
-            for a in news_res["articles"][:30]:
-                url_html = f"<a href='{a['url']}' style='color:#e8a020;font-size:0.6rem;'>↗ Read</a>" if a.get("url") else ""
+        # ── Price chart with news event markers ──────────────────
+        if bench_res["ok"] and articles:
+            st.markdown("<div class='sh'>Price Chart with News Event Markers</div>", unsafe_allow_html=True)
+            bdf = bench_res["df"]
+            fig_n = go.Figure()
+            fig_n.add_trace(go.Scatter(
+                x=bdf.index, y=bdf["Close"], name="Price",
+                line=dict(color=PALETTE["WTI"], width=1.8),
+                fill="tozeroy", fillcolor=rgba(PALETTE["WTI"], 0.05),
+            ))
+            # Pin one vline per unique date that has news
+            news_dates = list({a["date"] for a in articles if a["date"]})
+            for date_str in news_dates:
+                try:
+                    idx = bdf.index.asof(pd.to_datetime(date_str))
+                    if pd.notna(idx) and idx in bdf.index:
+                        fig_n.add_vline(
+                            x=idx,
+                            line_color=rgba(PALETTE["NatGas"], 0.3),
+                            line_width=1, line_dash="dot",
+                        )
+                except Exception:
+                    pass
+            apply_theme(fig_n, f"{bench_ticker} — News Event Overlay (dotted = news day)", height=300)
+            st.plotly_chart(fig_n, use_container_width=True)
+
+        # ── Source filter ────────────────────────────────────────
+        all_sources = sorted({a["source"] for a in articles})
+        n1, n2 = st.columns([3, 1])
+        with n1:
+            src_filter = st.multiselect("Filter by source", all_sources, default=all_sources)
+        with n2:
+            n_show = st.slider("Articles to show", 5, 50, 20)
+
+        filtered = [a for a in articles if a["source"] in src_filter][:n_show]
+
+        # ── Article cards ────────────────────────────────────────
+        st.markdown(
+            f"<div class='prov'>Showing {len(filtered)} of {len(articles)} energy articles · "
+            f"fetched {news_res.get('fetched_at','')}</div>",
+            unsafe_allow_html=True,
+        )
+        for a in filtered:
+            url_html = (
+                f"<a href='{a['url']}' target='_blank' style='color:#e8a020;font-size:0.6rem;'>↗ Read full article</a>"
+                if a.get("url") else ""
+            )
+            st.markdown(f"""
+            <div class='news-card'>
+                <div class='news-title'>{a.get('title','')}</div>
+                <div class='news-meta'>📅 {a.get('date','')} &nbsp;·&nbsp; 📰 {a.get('source','')} &nbsp; {url_html}</div>
+                <div class='news-desc'>{a.get('description','')}</div>
+            </div>""", unsafe_allow_html=True)
+
+        # ── Historical event log at the bottom ───────────────────
+        with st.expander("📌 Historical Geopolitical Event Log"):
+            for date, desc, dot in GEO_EVENTS:
                 st.markdown(f"""
                 <div class='news-card'>
-                    <div class='news-title'>{a.get('title','')}</div>
-                    <div class='news-meta'>📅 {a.get('date','')} · 📰 {a.get('source','')} &nbsp; {url_html}</div>
-                    <div class='news-desc'>{a.get('description','')}</div>
+                    <div class='news-title'>{dot} {desc}</div>
+                    <div class='news-meta'>📅 {date} · Geopolitical Event Log</div>
                 </div>""", unsafe_allow_html=True)
-        else:
-            err_box(news_res.get("error", ""))
-            st.info("Could not fetch live news. Check your API key or query terms.")
 
 # ═══════════════════════════════════════════════════════════════
 # FOOTER
@@ -1328,9 +1504,8 @@ with tab_news:
 st.markdown("---")
 st.markdown(f"""
 <div style='text-align:center;font-family:Space Mono,monospace;font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
-    DATA SOURCES: Yahoo Finance · FRED (St. Louis Fed) · Alpha Vantage · NewsAPI<br>
-    Yahoo Finance requires no key · FRED / AV / News require free-tier registration<br>
-    Prices delayed ~15 min · Macro updated daily · News cached 30 min<br>
+    DATA SOURCES: Yahoo Finance (no key) · FRED (free key) · RSS: Reuters · BBC · Al Jazeera · OilPrice · Rigzone<br>
+    Prices ~15 min delayed · FRED updated daily · News cached 15 min · Commodities cached 5 min<br>
     Last render: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
 </div>
 """, unsafe_allow_html=True)
