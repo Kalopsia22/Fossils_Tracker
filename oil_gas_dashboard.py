@@ -315,6 +315,7 @@ div[data-testid="stExpander"] {
     border: 1px solid var(--border) !important;
     border-radius: 8px !important;
     background: var(--panel) !important;
+    margin-top: 8px !important;
 }
 div[data-testid="stExpander"] summary {
     font-family: var(--mono) !important;
@@ -2187,8 +2188,13 @@ with tab_map:
                 target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
             </div>""", unsafe_allow_html=True)
 
+    # ── Spacer to clear column layout (prevents overlap with tall right column iframes) ──
+    st.markdown("""
+    <div style='clear:both;width:100%;min-height:32px;display:block;'></div>
+    <hr style='border-color:var(--border);margin:24px 0 20px;'>
+    """, unsafe_allow_html=True)
+
     # ── Facility Detail Cards (collapsed) ────────────────────────────────────
-    st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📋 Full Facility Database — Refineries & Storage"):
         card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
 
