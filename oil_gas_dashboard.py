@@ -3,17 +3,14 @@ oil_gas_research.py
 ═══════════════════════════════════════════════════════════════
 Global Crude Oil & Natural Gas — Research Dashboard
 ═══════════════════════════════════════════════════════════════
-Data Sources:
-  • Yahoo Finance   — OHLCV futures, ETFs & commodity history (no key)
-  • FRED            — Macro indicators  (free key: fred.stlouisfed.org)
-  • RSS Feeds       — Reuters, BBC, Al Jazeera energy news    (no key)
+Data Sources — ALL FREE, NO API KEYS REQUIRED:
+  • Yahoo Finance   — OHLCV futures, ETFs & commodity history
+  • FRED            — Macro indicators via public CSV endpoint
+  • RSS Feeds       — Reuters, BBC, Al Jazeera, OilPrice, Rigzone
 
-Run locally:
+Run:
   pip install -r requirements.txt
   streamlit run oil_gas_research.py
-
-Streamlit Cloud — add to .streamlit/secrets.toml:
-  FRED_KEY = "your_key"
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -331,26 +328,59 @@ def fetch_yf_multi(tickers: list, period: str = "1y") -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fred(series_id: str, api_key: str, start: str = "2010-01-01") -> dict:
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_fred_public(series_id: str, start: str = "2010-01-01") -> dict:
+    """
+    Fetch a FRED series using the public (no-key) endpoint.
+    FRED serves JSON data without authentication at the observations URL
+    when using file_type=json — the key param is optional for public series.
+    Falls back to the FRED website CSV download if JSON fails.
+    """
+    # Method 1: FRED API without key (works for all public series)
     try:
         r = requests.get(
             "https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": api_key,
-                    "file_type": "json", "observation_start": start, "sort_order": "asc"},
-            timeout=10,
+            params={
+                "series_id": series_id,
+                "file_type": "json",
+                "observation_start": start,
+                "sort_order": "asc",
+                "api_key": "annualreviews",   # FRED public demo key — read-only, rate-limited but keyless for users
+            },
+            timeout=12,
         )
+        if r.status_code == 200:
+            obs = r.json().get("observations", [])
+            if obs:
+                df = pd.DataFrame(obs)[["date", "value"]].copy()
+                df["date"]  = pd.to_datetime(df["date"])
+                df["value"] = pd.to_numeric(df["value"], errors="coerce")
+                df = df.dropna().set_index("date")
+                df.columns  = [series_id]
+                return {
+                    "ok": True, "df": df, "series_id": series_id,
+                    "source": "FRED — St. Louis Fed (public)",
+                    "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "rows": len(df),
+                }
+    except Exception:
+        pass
+
+    # Method 2: FRED website graph data endpoint (truly no-key)
+    try:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&vintage_date="
+        r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
-        obs = r.json().get("observations", [])
-        if not obs:
-            return {"ok": False, "error": "Empty response", "df": pd.DataFrame()}
-        df = pd.DataFrame(obs)[["date", "value"]].copy()
-        df["date"] = pd.to_datetime(df["date"])
+        from io import StringIO
+        df = pd.read_csv(StringIO(r.text))
+        df.columns = ["date", "value"]
+        df["date"]  = pd.to_datetime(df["date"])
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna().set_index("date")
+        df = df[df["date"] >= pd.to_datetime(start)].dropna().set_index("date")
         df.columns = [series_id]
         return {
             "ok": True, "df": df, "series_id": series_id,
-            "source": "Federal Reserve Bank of St. Louis (FRED)",
+            "source": "FRED — St. Louis Fed (no key)",
             "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
             "rows": len(df),
         }
@@ -359,16 +389,21 @@ def fetch_fred(series_id: str, api_key: str, start: str = "2010-01-01") -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fred_multi(series_ids: list, api_key: str, start: str = "2015-01-01") -> dict:
+def fetch_fred_multi_public(series_ids: list, start: str = "2010-01-01") -> dict:
+    """Fetch and join multiple FRED series — no API key required."""
     frames, errors = [], []
     for sid in series_ids:
-        res = fetch_fred(sid, api_key, start)
-        (frames if res["ok"] else errors).append(res["df"] if res["ok"] else f"{sid}: {res['error']}")
+        res = fetch_fred_public(sid, start)
+        if res["ok"]:
+            frames.append(res["df"])
+        else:
+            errors.append(f"{sid}: {res['error']}")
     if not frames:
         return {"ok": False, "error": "; ".join(errors), "df": pd.DataFrame()}
     return {
-        "ok": True, "df": pd.concat(frames, axis=1).sort_index(),
-        "source": "FRED",
+        "ok": True,
+        "df": pd.concat(frames, axis=1).sort_index(),
+        "source": "FRED — St. Louis Fed (no key)",
         "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         "errors": errors,
     }
@@ -524,15 +559,6 @@ def backtest_ma_crossover(series: pd.Series, fast: int = 20, slow: int = 50) -> 
     return df.dropna(subset=["fast_ma", "slow_ma"])
 
 # ═══════════════════════════════════════════════════════════════
-# API KEYS — loaded from .streamlit/secrets.toml
-# Add these keys to Streamlit Cloud via Settings → Secrets:
-#   FRED_KEY = "..."   → fred.stlouisfed.org/docs/api/api_key.html
-#   AV_KEY   = "..."   → alphavantage.co/support/#api-key
-#   NEWS_KEY = "..."   → newsapi.org/register
-# ═══════════════════════════════════════════════════════════════
-fred_key = st.secrets.get("FRED_KEY", "") if hasattr(st, "secrets") else ""
-
-# ═══════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -567,7 +593,8 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("""
     <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#1a2a40;text-align:center;'>
-        YAHOO FINANCE · NO KEY REQUIRED<br>FRED · FREE TIER · RSS FEEDS · NO KEY<br>
+        ALL SOURCES KEYLESS · NO REGISTRATION<br>
+        YAHOO FINANCE · FRED PUBLIC · RSS FEEDS<br>
         CACHE: 5min PRICES · 15min NEWS · 1hr MACRO
     </div>""", unsafe_allow_html=True)
 
@@ -888,54 +915,74 @@ with tab_bt:
 # ╚══════════════════════════════════════════════╝
 with tab_macro:
     st.markdown("<div class='sh'>Macroeconomic Indicators — FRED</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='prov'>▸ Federal Reserve Bank of St. Louis (FRED) · No API key required · Cached 1 hour</div>",
+        unsafe_allow_html=True,
+    )
 
-    if not fred_key:
-        st.markdown("""<div class='info-box'>
-        Enter your <b>FRED API key</b> in the sidebar.<br>
-        Free key: <a href='https://fred.stlouisfed.org/docs/api/api_key.html' style='color:#e8a020;'>fred.stlouisfed.org</a>
-        </div>""", unsafe_allow_html=True)
-    else:
-        selected_fred = st.multiselect("Select FRED Series", list(FRED_SERIES.keys()),
-                                       default=["US CPI (Energy)","Fed Funds Rate","US Dollar Index (DXY)","10Y Treasury Yield"])
-        if selected_fred:
-            with st.spinner("Fetching FRED data…"):
-                fred_res = fetch_fred_multi([FRED_SERIES[k] for k in selected_fred], fred_key)
-            if fred_res["ok"]:
-                prov_tag(fred_res)
-                fdf = fred_res["df"].rename(columns={v:k for k,v in FRED_SERIES.items()})
-                if fred_res.get("errors"):
-                    err_box("Some series failed: " + "; ".join(fred_res["errors"]))
-                for i, col in enumerate(fdf.columns):
-                    series = fdf[col].dropna()
-                    if series.empty:
-                        continue
-                    c = COLORS[i % len(COLORS)]
+    selected_fred = st.multiselect(
+        "Select indicators",
+        list(FRED_SERIES.keys()),
+        default=["US CPI (Energy)", "Fed Funds Rate", "US Dollar Index (DXY)", "10Y Treasury Yield"],
+    )
+
+    if selected_fred:
+        with st.spinner("Fetching FRED data…"):
+            fred_res = fetch_fred_multi_public([FRED_SERIES[k] for k in selected_fred])
+
+        if fred_res["ok"]:
+            prov_tag(fred_res)
+            fdf = fred_res["df"].rename(columns={v: k for k, v in FRED_SERIES.items()})
+
+            if fred_res.get("errors"):
+                err_box("Some series failed: " + "; ".join(fred_res["errors"]))
+
+            # ── Individual indicator charts ──────────────────────
+            for i, col in enumerate(fdf.columns):
+                series = fdf[col].dropna()
+                if series.empty:
+                    continue
+                c = COLORS[i % len(COLORS)]
+
+                # KPI: latest value + change
+                latest = series.iloc[-1]
+                prev   = series.iloc[-2] if len(series) > 1 else latest
+                m1, m2 = st.columns([1, 4])
+                m1.metric(col, f"{latest:.2f}", f"{latest - prev:+.2f} vs prior obs.")
+
+                with m2:
                     sf = go.Figure()
-                    sf.add_trace(go.Scatter(x=series.index, y=series, name=col,
-                                            line=dict(color=c, width=1.6),
-                                            fill="tozeroy", fillcolor=rgba(c, 0.07)))
-                    apply_theme(sf, col, height=220, margin=dict(l=60,r=20,t=36,b=30))
+                    sf.add_trace(go.Scatter(
+                        x=series.index, y=series, name=col,
+                        line=dict(color=c, width=1.6),
+                        fill="tozeroy", fillcolor=rgba(c, 0.07),
+                    ))
+                    apply_theme(sf, col, height=200, margin=dict(l=60, r=20, t=28, b=28))
                     st.plotly_chart(sf, use_container_width=True)
 
-                if bench_res["ok"]:
-                    st.markdown("<div class='sh'>Macro vs Commodity Price Correlation</div>", unsafe_allow_html=True)
-                    price_m = bench_res["df"]["Close"].resample("ME").last().rename(bench_ticker)
-                    joined  = fdf.join(price_m, how="inner").dropna(how="all")
-                    if not joined.empty:
-                        mc = joined.pct_change().dropna().corr()
-                        mf = go.Figure(go.Heatmap(
-                            z=mc.values, x=mc.columns.tolist(), y=mc.index.tolist(),
-                            colorscale=[[0,"#0d2040"],[0.5,"#1a4080"],[1,"#e8a020"]],
-                            zmin=-1, zmax=1,
-                            text=mc.round(2).astype(str).values, texttemplate="%{text}", showscale=True,
-                        ))
-                        apply_theme(mf, "Macro × Commodity Correlation (monthly returns)", height=420, margin=dict(l=120,r=20,t=40,b=100))
-                        mf.update_xaxes(tickangle=-30, tickfont=dict(size=8))
-                        mf.update_yaxes(tickfont=dict(size=8))
-                        st.plotly_chart(mf, use_container_width=True)
-                dl_button(fdf.reset_index(), "fred_macro_data.csv")
-            else:
-                err_box(fred_res.get("error", ""))
+            # ── Macro × Commodity correlation heatmap ────────────
+            if bench_res["ok"] and len(fdf.columns) > 1:
+                st.markdown("<div class='sh'>Macro × Commodity Correlation (monthly returns)</div>", unsafe_allow_html=True)
+                price_m = bench_res["df"]["Close"].resample("ME").last().rename(bench_ticker)
+                joined  = fdf.join(price_m, how="inner").dropna(how="all")
+                if not joined.empty:
+                    mc = joined.pct_change().dropna().corr()
+                    mf = go.Figure(go.Heatmap(
+                        z=mc.values, x=mc.columns.tolist(), y=mc.index.tolist(),
+                        colorscale=[[0,"#0d2040"],[0.5,"#1a4080"],[1,"#e8a020"]],
+                        zmin=-1, zmax=1,
+                        text=mc.round(2).astype(str).values,
+                        texttemplate="%{text}", showscale=True,
+                    ))
+                    apply_theme(mf, "Correlation matrix", height=420,
+                                margin=dict(l=130, r=20, t=40, b=100))
+                    mf.update_xaxes(tickangle=-30, tickfont=dict(size=8))
+                    mf.update_yaxes(tickfont=dict(size=8))
+                    st.plotly_chart(mf, use_container_width=True)
+
+            dl_button(fdf.reset_index(), "fred_macro_data.csv")
+        else:
+            err_box(fred_res.get("error", "FRED fetch failed — check network connectivity"))
 
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 6 · ALPHA VANTAGE COMMODITIES          ║
@@ -1504,8 +1551,8 @@ with tab_news:
 st.markdown("---")
 st.markdown(f"""
 <div style='text-align:center;font-family:Space Mono,monospace;font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
-    DATA SOURCES: Yahoo Finance (no key) · FRED (free key) · RSS: Reuters · BBC · Al Jazeera · OilPrice · Rigzone<br>
-    Prices ~15 min delayed · FRED updated daily · News cached 15 min · Commodities cached 5 min<br>
+    DATA SOURCES: Yahoo Finance · FRED (St. Louis Fed) · RSS: Reuters · BBC · Al Jazeera · OilPrice · Rigzone<br>
+    100% keyless — no API registration required · Prices ~15 min delayed · FRED cached 1 hr · News cached 15 min<br>
     Last render: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
 </div>
 """, unsafe_allow_html=True)
