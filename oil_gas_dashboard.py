@@ -204,6 +204,13 @@ PLOTLY_LAYOUT = dict(
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
 )
 
+def hex_to_rgba(hex_color: str, alpha: float = 0.08) -> str:
+    """Convert #RRGGBB to rgba(r,g,b,alpha)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def make_date_range(days: int) -> pd.DatetimeIndex:
     end = datetime.today()
     return pd.date_range(end=end, periods=days, freq="D")
@@ -447,7 +454,7 @@ with tab_prices:
                 fig.add_trace(go.Scatter(
                     x=crude_df["date"], y=series, name=col,
                     line=dict(color=COLORS[col], width=2),
-                    fill="tozeroy", fillcolor=COLORS[col].replace(")", ",0.06)").replace("rgb", "rgba") if "rgb" in COLORS[col] else COLORS[col] + "10",
+                    fill="tozeroy", fillcolor=hex_to_rgba(COLORS[col], 0.07),
                 ))
                 if show_ma and ma is not None:
                     fig.add_trace(go.Scatter(
@@ -710,7 +717,7 @@ with tab_inventory:
     inv_fig.add_trace(go.Scatter(
         x=inv_df["date"], y=inv_df[inv_metric], name=inv_metric,
         fill="tozeroy", line=dict(color=INV_COLORS[inv_metric], width=2),
-        fillcolor=INV_COLORS[inv_metric] + "18",
+        fillcolor=hex_to_rgba(INV_COLORS[inv_metric], 0.09),
     ))
     # 4-week MA
     inv_fig.add_trace(go.Scatter(
@@ -739,7 +746,7 @@ with tab_inventory:
     for i, (product, color) in enumerate(INV_COLORS.items(), 1):
         multi_fig.add_trace(go.Scatter(x=inv_df["date"], y=inv_df[product],
                                        line=dict(color=color, width=1.8), name=product,
-                                       fill="tozeroy", fillcolor=color + "10"), row=i, col=1)
+                                       fill="tozeroy", fillcolor=hex_to_rgba(color, 0.07)), row=i, col=1)
     multi_fig.update_layout(**PLOTLY_LAYOUT, height=500, showlegend=False)
     multi_fig.update_annotations(font=dict(size=10, color="#6b8cba"))
     st.plotly_chart(multi_fig, use_container_width=True)
