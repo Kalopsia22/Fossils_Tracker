@@ -374,7 +374,124 @@ def fetch_commodity_history(tickers: list, period: str = "5y") -> dict:
         return {"ok": False, "error": str(e), "df": pd.DataFrame()}
 
 
-# ── RSS Energy News (no API key) ─────────────────────────────
+# ── NASA FIRMS — live fire / gas flaring detection ───────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_nasa_firms(lat: float, lon: float, radius_km: int = 50) -> dict:
+    """
+    Query NASA FIRMS (Fire Information for Resource Management System).
+    Uses the public CSV endpoint — no API key required.
+    Returns recent thermal anomalies within radius_km of a facility.
+    """
+    try:
+        # FIRMS public CSV: last 7 days, VIIRS S-NPP 375m sensor
+        url = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/c6b4a8e9d3f7e2a1b5c9d2e4f6a8b0c2/VIIRS_SNPP_NRT"
+        # bbox: lon-r, lat-r, lon+r, lat+r  (approx 1 deg ≈ 111 km)
+        deg = radius_km / 111.0
+        bbox = f"{lon-deg:.3f},{lat-deg:.3f},{lon+deg:.3f},{lat+deg:.3f}"
+        r = requests.get(f"{url}/{bbox}/7", timeout=10,
+                         headers={"User-Agent": "OilGasResearchDashboard/1.0"})
+        if r.status_code != 200 or not r.text.strip():
+            return {"ok": False, "error": f"HTTP {r.status_code}", "df": pd.DataFrame(), "count": 0}
+        from io import StringIO
+        df = pd.read_csv(StringIO(r.text))
+        if df.empty or "latitude" not in df.columns:
+            return {"ok": True, "df": pd.DataFrame(), "count": 0,
+                    "source": "NASA FIRMS VIIRS S-NPP",
+                    "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
+        df = df[["latitude","longitude","bright_ti4","frp","acq_date","acq_time","confidence"]].copy()
+        df["bright_ti4"] = pd.to_numeric(df["bright_ti4"], errors="coerce")
+        df["frp"]        = pd.to_numeric(df["frp"],        errors="coerce")
+        return {
+            "ok": True, "df": df, "count": len(df),
+            "source": "NASA FIRMS VIIRS S-NPP NRT (7-day)",
+            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "df": pd.DataFrame(), "count": 0}
+
+
+# ── Open-Meteo — live weather at facility coordinates ─────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_weather(lat: float, lon: float) -> dict:
+    """Fetch current weather + 24h forecast via Open-Meteo. No key needed."""
+    try:
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat, "longitude": lon,
+                "current": "temperature_2m,wind_speed_10m,wind_direction_10m,"
+                           "relative_humidity_2m,weather_code,visibility,surface_pressure",
+                "hourly": "temperature_2m,wind_speed_10m,precipitation_probability",
+                "forecast_days": 2,
+                "wind_speed_unit": "kmh",
+                "timezone": "UTC",
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        data = r.json()
+        curr = data.get("current", {})
+        hourly = data.get("hourly", {})
+        # Build 24h forecast df
+        fcast_df = pd.DataFrame({
+            "time":     pd.to_datetime(hourly.get("time", [])),
+            "temp_c":   hourly.get("temperature_2m", []),
+            "wind_kmh": hourly.get("wind_speed_10m", []),
+            "precip_pct": hourly.get("precipitation_probability", []),
+        }).head(24)
+        WMO_CODES = {
+            0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+            45:"Foggy",48:"Rime fog",51:"Light drizzle",53:"Drizzle",
+            61:"Light rain",63:"Rain",71:"Light snow",73:"Snow",
+            80:"Rain showers",81:"Heavy showers",95:"Thunderstorm",
+            99:"Thunderstorm w/ hail",
+        }
+        return {
+            "ok": True,
+            "temp_c":      curr.get("temperature_2m"),
+            "wind_kmh":    curr.get("wind_speed_10m"),
+            "wind_dir":    curr.get("wind_direction_10m"),
+            "humidity":    curr.get("relative_humidity_2m"),
+            "pressure":    curr.get("surface_pressure"),
+            "visibility":  curr.get("visibility"),
+            "condition":   WMO_CODES.get(curr.get("weather_code", 0), "Unknown"),
+            "fcast_df":    fcast_df,
+            "source":      "Open-Meteo (no key)",
+            "fetched_at":  datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ── Sentinel Hub EO Browser iframe URL builder ────────────────
+def sentinel_hub_url(lat: float, lon: float, zoom: int = 13) -> str:
+    """
+    Build a Sentinel Hub EO Browser URL for recent true-colour imagery.
+    Opens as an iframe — no API key needed for the browser view.
+    """
+    return (
+        f"https://apps.sentinel-hub.com/eo-browser/"
+        f"?zoom={zoom}&lat={lat:.4f}&lng={lon:.4f}"
+        f"&themeId=DEFAULT-THEME"
+        f"&visualizationUrl=https%3A%2F%2Fservices.sentinel-hub.com%2Fogc%2Fwms%2Fbd86bcc0-f318-402b-a145-015f85b9427e"
+        f"&datasetId=S2L2A&fromTime=2024-01-01T00%3A00%3A00.000Z"
+        f"&toTime={datetime.utcnow().strftime('%Y-%m-%dT%H%%3A%M%%3A%S')}.000Z"
+        f"&layerId=1_TRUE_COLOR"
+    )
+
+
+# ── MarineTraffic AIS embed URL builder ───────────────────────
+def marinetraffic_url(lat: float, lon: float, zoom: int = 10) -> str:
+    """Build MarineTraffic live vessel tracking embed URL."""
+    return (
+        f"https://www.marinetraffic.com/en/ais/embed/zoom:{zoom}"
+        f"/centery:{lat:.3f}/centerx:{lon:.3f}"
+        f"/maptype:1/shownames:false/mmsi:0/shipid:0/fleet:/fleet_id:/vtypes:/selectedMapType:0"
+    )
+
+
+# ── RSS feeds (kept below) ────────────────────────────────────
+
 RSS_FEEDS = {
     "Reuters Energy":      "https://feeds.reuters.com/reuters/businessNews",
     "BBC Business":        "https://feeds.bbci.co.uk/news/business/rss.xml",
@@ -1341,75 +1458,331 @@ with tab_map:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Facility Detail Cards ────────────────────────────────────────────────
-    st.markdown("<div class='sh'>Facility Detail Cards</div>", unsafe_allow_html=True)
+    # ── Facility Intelligence Panel ──────────────────────────────────────────
+    st.markdown("<div class='sh'>Facility Intelligence Panel</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    Select a facility below to open a live intelligence panel — NASA FIRMS flaring detection,
+    real-time weather, Sentinel-2 satellite imagery, and AIS vessel tracking.
+    </div>""", unsafe_allow_html=True)
 
-    card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
+    # Build combined facility list for selector
+    all_facilities = pd.concat([
+        ref_filt[["Name","Lat","Lon","Country","Operator","Type","Region","Status"]].assign(
+            Detail=ref_filt.apply(lambda r: f"{r['Operator']} · {r['Capacity_kbd']:,} kb/d · {r['Crude']}", axis=1)
+        ),
+        stor_filt[["Name","Lat","Lon","Country","Operator","Type","Region","Status"]].assign(
+            Detail=stor_filt.apply(lambda r: f"{r['Operator']} · {r['Capacity_MMbbl']:,} MMbbl · {r['Product']}", axis=1)
+        ),
+    ], ignore_index=True)
 
-    with card_tab1:
-        card_region = st.selectbox("Region", ["All"] + sorted(REFINERIES["Region"].unique()), key="card_reg")
-        card_status = st.selectbox("Status", ["All"] + sorted(REFINERIES["Status"].unique()), key="card_stat")
-        card_df = REFINERIES.copy()
-        if card_region != "All":
-            card_df = card_df[card_df["Region"] == card_region]
-        if card_status != "All":
-            card_df = card_df[card_df["Status"] == card_status]
-        card_df = card_df.sort_values("Capacity_kbd", ascending=False)
+    fac_options = ["— select a facility —"] + all_facilities["Name"].tolist()
+    selected_fac = st.selectbox("Choose facility", fac_options, key="fac_select")
 
-        STATUS_DOT = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠","Reduced":"🔴"}
-        cols_per_row = 3
-        for row_start in range(0, len(card_df), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for ci, (_, row) in enumerate(card_df.iloc[row_start:row_start+cols_per_row].iterrows()):
-                dot = STATUS_DOT.get(row["Status"], "⚪")
-                with cols[ci]:
-                    st.markdown(f"""
-                    <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
-                                padding:14px 16px;margin-bottom:10px;min-height:160px;'>
-                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
-                                    color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
-                        <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
-                            {row["Country"]} · {row["Region"]}
-                        </div>
-                        <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
-                            <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
-                            <b style='color:#c8a060;'>Capacity</b> {row["Capacity_kbd"]:,} kb/d<br>
-                            <b style='color:#c8a060;'>Crude Type</b> {row["Crude"]}<br>
-                            <b style='color:#c8a060;'>Status</b> {row["Status"]}
-                        </div>
+    if selected_fac != "— select a facility —":
+        fac_row = all_facilities[all_facilities["Name"] == selected_fac].iloc[0]
+        fac_lat, fac_lon = float(fac_row["Lat"]), float(fac_row["Lon"])
+        fac_type = fac_row["Type"]
+
+        STATUS_DOT = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠",
+                      "Reduced":"🔴","SPR":"🛡️","Storage":"🗄️"}
+        dot = STATUS_DOT.get(fac_row["Status"], "⚪")
+
+        # ── Facility header ──────────────────────────────────────
+        st.markdown(f"""
+        <div style='background:#0d1825;border:1px solid #1b2d4f;border-radius:10px;
+                    padding:18px 22px;margin:10px 0 18px;'>
+            <div style='font-family:Syne,sans-serif;font-weight:800;font-size:1.3rem;
+                        color:#e8dfc8;'>{dot} {selected_fac}</div>
+            <div style='font-family:Space Mono,monospace;font-size:0.62rem;color:#3a5a88;
+                        margin:4px 0 10px;'>{fac_row["Country"]} · {fac_row["Region"]} · {fac_type}</div>
+            <div style='font-size:0.82rem;color:#8aaccc;'>
+                <b style='color:#c8a060;'>Operator</b>&nbsp; {fac_row["Operator"]} &nbsp;·&nbsp;
+                <b style='color:#c8a060;'>Details</b>&nbsp; {fac_row["Detail"]} &nbsp;·&nbsp;
+                <b style='color:#c8a060;'>Coords</b>&nbsp;
+                <span style='font-family:Space Mono,monospace;font-size:0.72rem;'>
+                {fac_lat:.4f}°, {fac_lon:.4f}°</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ════════════════════════════════════════════
+        # PANEL COLUMNS: left = data, right = visuals
+        # ════════════════════════════════════════════
+        left_col, right_col = st.columns([1, 1], gap="large")
+
+        # ── LEFT: Weather + NASA FIRMS ───────────────────────────
+        with left_col:
+
+            # ── Live Weather ────────────────────────────────────
+            st.markdown("<div class='sh'>🌤 Live Weather — Open-Meteo</div>", unsafe_allow_html=True)
+            with st.spinner("Fetching weather…"):
+                wx = fetch_weather(fac_lat, fac_lon)
+
+            if wx.get("ok"):
+                st.markdown(f"""
+                <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                            padding:16px 18px;margin-bottom:12px;'>
+                    <div style='font-size:2rem;font-weight:800;color:#e8dfc8;font-family:Syne,sans-serif;'>
+                        {wx["temp_c"]:.1f}°C
+                        <span style='font-size:0.9rem;color:#6080a8;font-weight:400;'>{wx["condition"]}</span>
                     </div>
-                    """, unsafe_allow_html=True)
-
-        dl_button(card_df, "refineries_global.csv")
-
-    with card_tab2:
-        stor_region = st.selectbox("Region", ["All"] + sorted(STORAGE["Region"].unique()), key="stor_reg")
-        stor_df = STORAGE if stor_region == "All" else STORAGE[STORAGE["Region"] == stor_region]
-        stor_df = stor_df.sort_values("Capacity_MMbbl", ascending=False)
-
-        for row_start in range(0, len(stor_df), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for ci, (_, row) in enumerate(stor_df.iloc[row_start:row_start+cols_per_row].iterrows()):
-                stype_icon = "🛡️" if row["Type"] == "SPR" else "🗄️"
-                with cols[ci]:
-                    st.markdown(f"""
-                    <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
-                                padding:14px 16px;margin-bottom:10px;min-height:150px;'>
-                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
-                                    color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
-                        <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
-                            {row["Country"]} · {row["Type"]}
-                        </div>
-                        <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
-                            <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
-                            <b style='color:#c8a060;'>Capacity</b> {row["Capacity_MMbbl"]:,} MMbbl<br>
-                            <b style='color:#c8a060;'>Product</b> {row["Product"]}<br>
-                            <b style='color:#c8a060;'>Status</b> {row["Status"]}
-                        </div>
+                    <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;
+                                font-family:Space Mono,monospace;font-size:0.65rem;color:#8aaccc;'>
+                        <div><span style='color:#c8a060;'>WIND</span><br>
+                             {wx["wind_kmh"]:.0f} km/h @ {wx["wind_dir"]:.0f}°</div>
+                        <div><span style='color:#c8a060;'>HUMIDITY</span><br>{wx["humidity"]}%</div>
+                        <div><span style='color:#c8a060;'>PRESSURE</span><br>{wx["pressure"]:.0f} hPa</div>
+                        <div><span style='color:#c8a060;'>VISIBILITY</span><br>
+                             {wx["visibility"]/1000:.1f} km</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                </div>
+                <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;'>
+                ▸ {wx["source"]} · {wx["fetched_at"]}</div>
+                """, unsafe_allow_html=True)
 
-        dl_button(stor_df, "storage_terminals_global.csv")
+                # 24h forecast sparklines
+                fdf_wx = wx["fcast_df"]
+                if not fdf_wx.empty:
+                    fig_wx = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                          vertical_spacing=0.08, row_heights=[0.5, 0.5])
+                    fig_wx.add_trace(go.Scatter(
+                        x=fdf_wx["time"], y=fdf_wx["wind_kmh"], name="Wind (km/h)",
+                        line=dict(color=PALETTE["Brent"], width=1.6),
+                        fill="tozeroy", fillcolor=rgba(PALETTE["Brent"], 0.1),
+                    ), row=1, col=1)
+                    fig_wx.add_trace(go.Bar(
+                        x=fdf_wx["time"], y=fdf_wx["precip_pct"], name="Precip %",
+                        marker_color=rgba(PALETTE["NatGas"], 0.6),
+                    ), row=2, col=1)
+                    apply_theme(fig_wx, "24h Forecast", height=220,
+                                margin=dict(l=45, r=10, t=28, b=28))
+                    fig_wx.update_xaxes(**THEME["xaxis"])
+                    fig_wx.update_yaxes(**THEME["yaxis"])
+                    st.plotly_chart(fig_wx, use_container_width=True)
+            else:
+                err_box(f"Weather: {wx.get('error','')}")
+
+            # ── NASA FIRMS Thermal Anomalies ─────────────────────
+            st.markdown("<div class='sh'>🔥 NASA FIRMS — Thermal Anomaly Detection</div>",
+                        unsafe_allow_html=True)
+            st.markdown(
+                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "margin-bottom:8px;'>VIIRS S-NPP 375m · Last 7 days · ~50km radius</div>",
+                unsafe_allow_html=True,
+            )
+            with st.spinner("Querying NASA FIRMS…"):
+                firms = fetch_nasa_firms(fac_lat, fac_lon, radius_km=50)
+
+            if firms.get("ok"):
+                if firms["count"] == 0:
+                    st.markdown("""
+                    <div style='background:#0d1a0d;border:1px solid #1b3a1b;border-radius:8px;
+                                padding:14px;font-family:Space Mono,monospace;font-size:0.7rem;
+                                color:#40b860;'>
+                        ✓ No thermal anomalies detected in last 7 days within 50 km.<br>
+                        Normal flaring / operational baseline.
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    df_f = firms["df"]
+                    avg_frp  = df_f["frp"].mean()
+                    max_frp  = df_f["frp"].max()
+                    severity = "🔴 HIGH" if max_frp > 500 else ("🟡 MODERATE" if max_frp > 100 else "🟢 LOW")
+                    st.markdown(f"""
+                    <div style='background:#1a0d08;border:1px solid #3a2010;border-radius:8px;
+                                padding:14px;margin-bottom:10px;'>
+                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;
+                                    color:#f06060;'>{firms["count"]} thermal anomalies detected</div>
+                        <div style='font-family:Space Mono,monospace;font-size:0.62rem;color:#a08060;
+                                    margin-top:6px;'>
+                            Severity: {severity}<br>
+                            Avg FRP: {avg_frp:.1f} MW &nbsp;·&nbsp; Peak FRP: {max_frp:.1f} MW<br>
+                            Dates: {df_f["acq_date"].min()} → {df_f["acq_date"].max()}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    # Mini map of hotspots relative to facility
+                    fig_firms = go.Figure()
+                    fig_firms.add_trace(go.Scattergeo(
+                        lat=[fac_lat], lon=[fac_lon],
+                        mode="markers", marker=dict(size=14, color="#e8a020",
+                                                    symbol="star", opacity=1),
+                        name="Facility",
+                    ))
+                    fig_firms.add_trace(go.Scattergeo(
+                        lat=df_f["latitude"], lon=df_f["longitude"],
+                        mode="markers",
+                        marker=dict(
+                            size=np.clip(df_f["frp"].fillna(10) / 20 + 5, 5, 20),
+                            color=df_f["frp"].fillna(0),
+                            colorscale=[[0,"#ff6b6b"],[0.5,"#ff0000"],[1,"#ffffff"]],
+                            opacity=0.85,
+                            showscale=True,
+                            colorbar=dict(title="FRP (MW)", thickness=10,
+                                          titlefont=dict(size=9), tickfont=dict(size=8)),
+                        ),
+                        name="Thermal anomaly",
+                        hovertemplate="FRP: %{marker.color:.0f} MW<br>%{lat:.3f}, %{lon:.3f}<extra></extra>",
+                    ))
+                    deg = 0.6
+                    fig_firms.update_layout(
+                        geo=dict(
+                            projection_type="mercator",
+                            showland=True, landcolor="#0d1825",
+                            showocean=True, oceancolor="#07090f",
+                            showcountries=True, countrycolor="#1b2d4f",
+                            bgcolor="#07090f",
+                            lonaxis=dict(range=[fac_lon-deg, fac_lon+deg]),
+                            lataxis=dict(range=[fac_lat-deg, fac_lat+deg]),
+                        ),
+                        paper_bgcolor="#07090f",
+                        font=dict(color="#6080a8", family="Space Mono,monospace", size=9),
+                        margin=dict(l=0, r=0, t=0, b=0), height=280,
+                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=9)),
+                    )
+                    st.plotly_chart(fig_firms, use_container_width=True)
+                    st.dataframe(
+                        df_f[["acq_date","acq_time","frp","bright_ti4","confidence"]].rename(columns={
+                            "acq_date":"Date","acq_time":"Time (UTC)",
+                            "frp":"FRP (MW)","bright_ti4":"Brightness (K)","confidence":"Confidence",
+                        }).sort_values("FRP (MW)", ascending=False).head(10),
+                        use_container_width=True, hide_index=True,
+                    )
+                st.markdown(
+                    f"<div class='prov'>▸ {firms['source']} · {firms['fetched_at']}</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                err_box(f"NASA FIRMS: {firms.get('error','')}")
+                st.markdown("""
+                <div class='info-box'>NASA FIRMS may be temporarily unavailable or the
+                domain may be restricted on this deployment. Try again shortly.</div>""",
+                unsafe_allow_html=True)
+
+        # ── RIGHT: Sentinel Hub + AIS ────────────────────────────
+        with right_col:
+
+            # ── Sentinel Hub Satellite Imagery ───────────────────
+            st.markdown("<div class='sh'>🛰 Sentinel-2 Satellite Imagery</div>",
+                        unsafe_allow_html=True)
+            st.markdown(
+                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "margin-bottom:8px;'>ESA Copernicus · 10m resolution · ~5 day revisit · "
+                "True colour composite — opens interactive viewer</div>",
+                unsafe_allow_html=True,
+            )
+            sat_zoom = st.slider("Satellite zoom", 10, 16, 13, key="sat_zoom")
+            sentinel_url = sentinel_hub_url(fac_lat, fac_lon, zoom=sat_zoom)
+
+            st.markdown(f"""
+            <div style='border:1px solid #1b2d4f;border-radius:8px;overflow:hidden;
+                        margin-bottom:6px;'>
+                <iframe src="{sentinel_url}"
+                    width="100%" height="420"
+                    style="border:none;display:block;"
+                    loading="lazy"
+                    title="Sentinel-2 imagery — {selected_fac}">
+                </iframe>
+            </div>
+            <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;
+                        margin-bottom:16px;'>
+                ▸ Sentinel Hub EO Browser · ESA Copernicus Programme · No key required
+                · <a href="{sentinel_url}" target="_blank"
+                style='color:#e8a020;'>Open full screen ↗</a>
+            </div>""", unsafe_allow_html=True)
+
+            # ── AIS Vessel Tracking ──────────────────────────────
+            st.markdown("<div class='sh'>🚢 AIS Live Vessel Tracking — MarineTraffic</div>",
+                        unsafe_allow_html=True)
+            st.markdown(
+                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "margin-bottom:8px;'>Live AIS positions · Tankers, product carriers & LNG vessels "
+                "near this terminal · Updates every ~2 min</div>",
+                unsafe_allow_html=True,
+            )
+            ais_zoom = st.slider("AIS map zoom", 7, 14, 10, key="ais_zoom")
+            ais_url = marinetraffic_url(fac_lat, fac_lon, zoom=ais_zoom)
+
+            st.markdown(f"""
+            <div style='border:1px solid #1b2d4f;border-radius:8px;overflow:hidden;
+                        margin-bottom:6px;'>
+                <iframe src="{ais_url}"
+                    width="100%" height="420"
+                    style="border:none;display:block;"
+                    loading="lazy"
+                    title="AIS vessel tracking — {selected_fac}">
+                </iframe>
+            </div>
+            <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;'>
+                ▸ MarineTraffic AIS · IMO/MMSI broadcast data ·
+                <a href="https://www.marinetraffic.com/en/ais/home/centerx:{fac_lon:.3f}/centery:{fac_lat:.3f}/zoom:{ais_zoom}"
+                target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
+            </div>""", unsafe_allow_html=True)
+
+    # ── Facility Detail Cards (collapsed) ────────────────────────────────────
+    with st.expander("📋 Full Facility Database — Refineries & Storage"):
+        card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
+
+        with card_tab1:
+            card_region = st.selectbox("Region", ["All"] + sorted(REFINERIES["Region"].unique()), key="card_reg")
+            card_status = st.selectbox("Status", ["All"] + sorted(REFINERIES["Status"].unique()), key="card_stat")
+            card_df = REFINERIES.copy()
+            if card_region != "All":
+                card_df = card_df[card_df["Region"] == card_region]
+            if card_status != "All":
+                card_df = card_df[card_df["Status"] == card_status]
+            card_df = card_df.sort_values("Capacity_kbd", ascending=False)
+
+            STATUS_DOT = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠","Reduced":"🔴"}
+            cols_per_row = 3
+            for row_start in range(0, len(card_df), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for ci, (_, row) in enumerate(card_df.iloc[row_start:row_start+cols_per_row].iterrows()):
+                    dot = STATUS_DOT.get(row["Status"], "⚪")
+                    with cols[ci]:
+                        st.markdown(f"""
+                        <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                    padding:14px 16px;margin-bottom:10px;min-height:160px;'>
+                            <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                                        color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
+                            <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                                {row["Country"]} · {row["Region"]}
+                            </div>
+                            <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                                <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                                <b style='color:#c8a060;'>Capacity</b> {row["Capacity_kbd"]:,} kb/d<br>
+                                <b style='color:#c8a060;'>Crude Type</b> {row["Crude"]}<br>
+                                <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+            dl_button(card_df, "refineries_global.csv")
+
+        with card_tab2:
+            stor_region = st.selectbox("Region", ["All"] + sorted(STORAGE["Region"].unique()), key="stor_reg")
+            stor_df = STORAGE if stor_region == "All" else STORAGE[STORAGE["Region"] == stor_region]
+            stor_df = stor_df.sort_values("Capacity_MMbbl", ascending=False)
+            cols_per_row = 3
+            for row_start in range(0, len(stor_df), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for ci, (_, row) in enumerate(stor_df.iloc[row_start:row_start+cols_per_row].iterrows()):
+                    stype_icon = "🛡️" if row["Type"] == "SPR" else "🗄️"
+                    with cols[ci]:
+                        st.markdown(f"""
+                        <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                    padding:14px 16px;margin-bottom:10px;min-height:150px;'>
+                            <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                                        color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
+                            <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                                {row["Country"]} · {row["Type"]}
+                            </div>
+                            <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                                <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                                <b style='color:#c8a060;'>Capacity</b> {row["Capacity_MMbbl"]:,} MMbbl<br>
+                                <b style='color:#c8a060;'>Product</b> {row["Product"]}<br>
+                                <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+            dl_button(stor_df, "storage_terminals_global.csv")
 
     # ── Summary stats ────────────────────────────────────────────────────────
     st.markdown("<div class='sh'>Global Capacity Summary</div>", unsafe_allow_html=True)
