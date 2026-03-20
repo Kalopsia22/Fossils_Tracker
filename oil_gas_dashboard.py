@@ -2188,6 +2188,7 @@ with tab_map:
             </div>""", unsafe_allow_html=True)
 
     # ── Facility Detail Cards (collapsed) ────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📋 Full Facility Database — Refineries & Storage"):
         card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
 
@@ -2254,11 +2255,57 @@ with tab_map:
 
     # ── Summary stats ────────────────────────────────────────────────────────
     st.markdown("<div class='sh'>Global Capacity Summary</div>", unsafe_allow_html=True)
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Total Refineries",       f"{len(ref_filt)}",                               "in current filter")
-    s2.metric("Total Refining Capacity",f"{ref_filt['Capacity_kbd'].sum():,} kb/d",       f"{ref_filt['Capacity_kbd'].sum()/1000:.1f} Mb/d")
-    s3.metric("Storage Terminals",      f"{len(stor_filt)}",                              "in current filter")
-    s4.metric("Total Storage Capacity", f"{stor_filt['Capacity_MMbbl'].sum():,} MMbbl",   "strategic + commercial")
+    total_ref_cap = ref_filt['Capacity_kbd'].sum()
+    total_stor_cap = stor_filt['Capacity_MMbbl'].sum()
+    st.markdown(f"""
+    <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:4px;'>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--gold);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
+                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
+                        margin-bottom:8px;'>Total Refineries</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
+                        letter-spacing:0.04em;line-height:1;'>{len(ref_filt)}</div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
+                        margin-top:6px;'>in current filter</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--teal);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
+                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
+                        margin-bottom:8px;'>Refining Capacity</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
+                        letter-spacing:0.04em;line-height:1;'>{total_ref_cap/1000:.1f} <span style='font-size:1.1rem;color:var(--text3);'>Mb/d</span></div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
+                        margin-top:6px;'>{total_ref_cap:,} kb/d total</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--blue);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
+                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
+                        margin-bottom:8px;'>Storage Terminals</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
+                        letter-spacing:0.04em;line-height:1;'>{len(stor_filt)}</div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
+                        margin-top:6px;'>in current filter</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--amber);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
+                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
+                        margin-bottom:8px;'>Storage Capacity</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
+                        letter-spacing:0.04em;line-height:1;'>{total_stor_cap:,.0f} <span style='font-size:1.1rem;color:var(--text3);'>MMbbl</span></div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
+                        margin-top:6px;'>strategic + commercial</div>
+        </div>
+    </div>
+    <div style='margin-bottom:20px;'></div>
+    """, unsafe_allow_html=True)
 
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 8 · GEOPOLITICAL NEWS                  ║
