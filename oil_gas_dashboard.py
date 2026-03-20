@@ -1018,11 +1018,11 @@ with st.sidebar:
     st.markdown("""
     <div style='text-align:center;padding:18px 0 20px;'>
         <div style='font-size:2.4rem;line-height:1;margin-bottom:8px;'>🛢️</div>
-        <div style='font-family:'Bebas Neue',sans-serif;font-size:1.4rem;
+        <div style='font-family:var(--display);font-size:1.4rem;
                     color:#c8d8e8;letter-spacing:0.2em;line-height:1;'>OIL & GAS</div>
-        <div style='font-family:'Bebas Neue',sans-serif;font-size:1.4rem;
+        <div style='font-family:var(--display);font-size:1.4rem;
                     color:#d4963a;letter-spacing:0.2em;line-height:1;margin-bottom:4px;'>RESEARCH</div>
-        <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
+        <div style='font-family:var(--mono);font-size:0.6rem;
                     font-weight:600;color:#3a5a78;letter-spacing:0.25em;
                     text-transform:uppercase;'>MULTI-SOURCE · LIVE DATA</div>
     </div>
@@ -1050,7 +1050,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("""
-    <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;font-weight:500;
+    <div style='font-family:var(--mono);font-size:0.6rem;font-weight:500;
                 color:#1e3050;text-align:center;letter-spacing:0.1em;text-transform:uppercase;'>
         ALL SOURCES KEYLESS · NO REGISTRATION<br>
         YAHOO FINANCE · FRED PUBLIC · RSS FEEDS<br>
@@ -1446,7 +1446,7 @@ with tab_macro:
                     st.metric(col.split("(")[0].strip(),
                               f"{latest:.3f} {unit}",
                               f"{latest - prev:+.3f}")
-                    st.markdown(f"<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;margin-top:4px;'>{desc}</div>",
+                    st.markdown(f"<div style='font-family:var(--mono);font-size:0.58rem;color:#3a5a88;margin-top:4px;'>{desc}</div>",
                                 unsafe_allow_html=True)
                 with r2:
                     sf = go.Figure()
@@ -1847,7 +1847,7 @@ with tab_map:
 
     # ── Legend explainer ─────────────────────────────────────────────────────
     st.markdown("""
-    <div style='display:flex;gap:20px;flex-wrap:wrap;font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#4a6fa5;padding:6px 0 14px;'>
+    <div style='display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:0.6rem;color:#4a6fa5;padding:6px 0 14px;'>
         <span><span style='color:#40b860'>●</span> Refinery — Operational</span>
         <span><span style='color:#e8a020'>●</span> Refinery — Commissioning</span>
         <span><span style='color:#f06060'>●</span> Refinery — Partial</span>
@@ -1892,15 +1892,15 @@ with tab_map:
         st.markdown(f"""
         <div style='background:#0d1825;border:1px solid #1b2d4f;border-radius:10px;
                     padding:18px 22px;margin:10px 0 18px;'>
-            <div style='font-family:'Bebas Neue',sans-serif;font-weight:800;font-size:1.3rem;
+            <div style='font-family:var(--display);font-weight:800;font-size:1.3rem;
                         color:#e8dfc8;'>{dot} {selected_fac}</div>
-            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;color:#3a5a88;
+            <div style='font-family:var(--mono);font-size:0.62rem;color:#3a5a88;
                         margin:4px 0 10px;'>{fac_row["Country"]} · {fac_row["Region"]} · {fac_type}</div>
             <div style='font-size:0.82rem;color:#8aaccc;'>
                 <b style='color:#c8a060;'>Operator</b>&nbsp; {fac_row["Operator"]} &nbsp;·&nbsp;
                 <b style='color:#c8a060;'>Details</b>&nbsp; {fac_row["Detail"]} &nbsp;·&nbsp;
                 <b style='color:#c8a060;'>Coords</b>&nbsp;
-                <span style='font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;'>
+                <span style='font-family:var(--mono);font-size:0.72rem;'>
                 {fac_lat:.4f}°, {fac_lon:.4f}°</span>
             </div>
         </div>
@@ -1923,12 +1923,12 @@ with tab_map:
                 st.markdown(f"""
                 <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                             padding:16px 18px;margin-bottom:12px;'>
-                    <div style='font-size:2rem;font-weight:800;color:#e8dfc8;font-family:'Bebas Neue',sans-serif;'>
+                    <div style='font-size:2rem;font-weight:800;color:#e8dfc8;font-family:var(--display);'>
                         {wx["temp_c"]:.1f}°C
                         <span style='font-size:0.9rem;color:#6080a8;font-weight:400;'>{wx["condition"]}</span>
                     </div>
                     <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;
-                                font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;color:#8aaccc;'>
+                                font-family:var(--mono);font-size:0.65rem;color:#8aaccc;'>
                         <div><span style='color:#c8a060;'>WIND</span><br>
                              {wx["wind_kmh"]:.0f} km/h @ {wx["wind_dir"]:.0f}°</div>
                         <div><span style='color:#c8a060;'>HUMIDITY</span><br>{wx["humidity"]}%</div>
@@ -1937,7 +1937,7 @@ with tab_map:
                              {wx["visibility"]/1000:.1f} km</div>
                     </div>
                 </div>
-                <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.55rem;color:#2a4060;'>
+                <div style='font-family:var(--mono);font-size:0.55rem;color:#2a4060;'>
                 ▸ {wx["source"]} · {wx["fetched_at"]}</div>
                 """, unsafe_allow_html=True)
 
@@ -2074,7 +2074,7 @@ with tab_map:
             # ── Satellite Imagery ────────────────────────────────
             st.markdown("<div class='sh'>🛰 Satellite Imagery</div>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
+                "<div style='font-family:var(--mono);font-size:0.58rem;color:#3a5a88;"
                 "margin-bottom:8px;'>Esri World Imagery (ArcGIS) · Free · No key · "
                 "Sub-metre resolution where available</div>",
                 unsafe_allow_html=True,
@@ -2134,7 +2134,7 @@ with tab_map:
             <div style='display:flex;gap:10px;margin:8px 0 20px;flex-wrap:wrap;'>
                 <a href="{gmaps_url.replace('output=embed&','')}"
                    target="_blank"
-                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
+                   style='font-family:var(--mono);font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -2142,7 +2142,7 @@ with tab_map:
                 </a>
                 <a href="https://livingatlas.arcgis.com/wayback/#active=18150&ext={fac_lon-0.03},{fac_lat-0.02},{fac_lon+0.03},{fac_lat+0.02}"
                    target="_blank"
-                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
+                   style='font-family:var(--mono);font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -2150,7 +2150,7 @@ with tab_map:
                 </a>
                 <a href="https://earthengine.google.com/timelapse#v={fac_lat:.4f},{fac_lon:.4f},12,latLng"
                    target="_blank"
-                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
+                   style='font-family:var(--mono);font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -2162,7 +2162,7 @@ with tab_map:
             st.markdown("<div class='sh'>🚢 AIS Live Vessel Tracking — MarineTraffic</div>",
                         unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
+                "<div style='font-family:var(--mono);font-size:0.58rem;color:#3a5a88;"
                 "margin-bottom:8px;'>Live AIS positions · Tankers, product carriers & LNG vessels "
                 "near this terminal · Updates every ~2 min</div>",
                 unsafe_allow_html=True,
@@ -2180,7 +2180,7 @@ with tab_map:
                     title="AIS vessel tracking — {selected_fac}">
                 </iframe>
             </div>
-            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.55rem;color:#2a4060;'>
+            <div style='font-family:var(--mono);font-size:0.55rem;color:#2a4060;'>
                 ▸ MarineTraffic AIS · IMO/MMSI broadcast data ·
                 <a href="https://www.marinetraffic.com/en/ais/home/centerx:{fac_lon:.3f}/centery:{fac_lat:.3f}/zoom:{ais_zoom}"
                 target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
@@ -2210,9 +2210,9 @@ with tab_map:
                         st.markdown(f"""
                         <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                                     padding:14px 16px;margin-bottom:10px;min-height:160px;'>
-                            <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.88rem;
+                            <div style='font-family:var(--display);font-weight:700;font-size:0.88rem;
                                         color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
-                            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
                                 {row["Country"]} · {row["Region"]}
                             </div>
                             <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
@@ -2237,9 +2237,9 @@ with tab_map:
                         st.markdown(f"""
                         <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                                     padding:14px 16px;margin-bottom:10px;min-height:150px;'>
-                            <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.88rem;
+                            <div style='font-family:var(--display);font-weight:700;font-size:0.88rem;
                                         color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
-                            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
                                 {row["Country"]} · {row["Type"]}
                             </div>
                             <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
@@ -2284,7 +2284,7 @@ with tab_news:
             short = s.split(":")[0]
             health_parts.append(f"<span style='color:#e05050'>✗ {short}</span>")
         st.markdown(
-            "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;margin-bottom:10px;'>"
+            "<div style='font-family:var(--mono);font-size:0.58rem;margin-bottom:10px;'>"
             + " &nbsp;·&nbsp; ".join(health_parts) + "</div>",
             unsafe_allow_html=True,
         )
@@ -2370,7 +2370,7 @@ with tab_news:
 # ═══════════════════════════════════════════════════════════════
 st.markdown("---")
 st.markdown(f"""
-<div style='text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
+<div style='text-align:center;font-family:var(--mono);font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
     DATA SOURCES: Yahoo Finance — prices, yields, FX, volatility, ETFs · RSS: Reuters · BBC · Al Jazeera · OilPrice · Rigzone<br>
     100% keyless — no API registration, no blocked domains · Prices ~15 min delayed · News cached 15 min<br>
     Last render: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
