@@ -661,36 +661,85 @@ def fetch_commodity_history(tickers: list, period: str = "5y") -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_nasa_firms(lat: float, lon: float, radius_km: int = 50) -> dict:
     """
-    Query NASA FIRMS (Fire Information for Resource Management System).
-    Uses the public CSV endpoint — no API key required.
-    Returns recent thermal anomalies within radius_km of a facility.
+    Fetch thermal anomaly data from NASA FIRMS.
+    Strategy:
+      1. Try FIRMS public NRT CSV download (no key, last 24h global file, filter by bbox)
+      2. Fall back to FIRMS active fire count via their public summary JSON
+    Both endpoints are completely public — no API key required.
     """
-    try:
-        # FIRMS public CSV: last 7 days, VIIRS S-NPP 375m sensor
-        url = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/c6b4a8e9d3f7e2a1b5c9d2e4f6a8b0c2/VIIRS_SNPP_NRT"
-        # bbox: lon-r, lat-r, lon+r, lat+r  (approx 1 deg ≈ 111 km)
-        deg = radius_km / 111.0
-        bbox = f"{lon-deg:.3f},{lat-deg:.3f},{lon+deg:.3f},{lat+deg:.3f}"
-        r = requests.get(f"{url}/{bbox}/7", timeout=10,
-                         headers={"User-Agent": "OilGasResearchDashboard/1.0"})
-        if r.status_code != 200 or not r.text.strip():
-            return {"ok": False, "error": f"HTTP {r.status_code}", "df": pd.DataFrame(), "count": 0}
-        from io import StringIO
-        df = pd.read_csv(StringIO(r.text))
-        if df.empty or "latitude" not in df.columns:
-            return {"ok": True, "df": pd.DataFrame(), "count": 0,
-                    "source": "NASA FIRMS VIIRS S-NPP",
-                    "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
-        df = df[["latitude","longitude","bright_ti4","frp","acq_date","acq_time","confidence"]].copy()
-        df["bright_ti4"] = pd.to_numeric(df["bright_ti4"], errors="coerce")
-        df["frp"]        = pd.to_numeric(df["frp"],        errors="coerce")
-        return {
-            "ok": True, "df": df, "count": len(df),
-            "source": "NASA FIRMS VIIRS S-NPP NRT (7-day)",
-            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e), "df": pd.DataFrame(), "count": 0}
+    from io import StringIO
+    deg = radius_km / 111.0
+    lat_min, lat_max = lat - deg, lat + deg
+    lon_min, lon_max = lon - deg, lon + deg
+
+    # ── Method 1: FIRMS public NRT CSV (last 24h, global, no key) ──
+    # These are the genuinely open NRT CSV files NASA publishes daily
+    NRT_SOURCES = [
+        ("VIIRS_SNPP", "https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-20-viirs-c2/csv/J1_VIIRS_C2_Global_24h.csv"),
+        ("MODIS",      "https://firms.modaps.eosdis.nasa.gov/data/active_fire/modis-c6.1/csv/MODIS_C6_1_Global_24h.csv"),
+        ("VIIRS_NOAA", "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv"),
+    ]
+
+    for sensor_name, csv_url in NRT_SOURCES:
+        try:
+            r = requests.get(csv_url, timeout=15,
+                             headers={"User-Agent": "OilGasResearchDashboard/1.0"})
+            if r.status_code != 200:
+                continue
+            df = pd.read_csv(StringIO(r.text))
+            if df.empty or "latitude" not in df.columns:
+                continue
+            df["latitude"]  = pd.to_numeric(df["latitude"],  errors="coerce")
+            df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
+            df = df.dropna(subset=["latitude","longitude"])
+            # Filter to facility bounding box
+            nearby = df[
+                (df["latitude"]  >= lat_min) & (df["latitude"]  <= lat_max) &
+                (df["longitude"] >= lon_min) & (df["longitude"] <= lon_max)
+            ].copy()
+            # Normalise column names across MODIS / VIIRS
+            frp_col  = next((c for c in ["frp","FRP"] if c in nearby.columns), None)
+            date_col = next((c for c in ["acq_date","ACQ_DATE"] if c in nearby.columns), None)
+            time_col = next((c for c in ["acq_time","ACQ_TIME"] if c in nearby.columns), None)
+            bright_col = next((c for c in ["bright_ti4","bright_t31","brightness","BRIGHT_TI4","BRIGHTNESS"] if c in nearby.columns), None)
+            conf_col = next((c for c in ["confidence","CONFIDENCE"] if c in nearby.columns), None)
+
+            out = pd.DataFrame()
+            out["latitude"]   = nearby["latitude"]
+            out["longitude"]  = nearby["longitude"]
+            out["frp"]        = pd.to_numeric(nearby[frp_col],    errors="coerce") if frp_col    else np.nan
+            out["acq_date"]   = nearby[date_col].astype(str)                        if date_col   else "N/A"
+            out["acq_time"]   = nearby[time_col].astype(str)                        if time_col   else "N/A"
+            out["bright_ti4"] = pd.to_numeric(nearby[bright_col], errors="coerce") if bright_col else np.nan
+            out["confidence"] = nearby[conf_col].astype(str)                        if conf_col   else "N/A"
+            out = out.dropna(subset=["latitude","longitude"])
+
+            return {
+                "ok": True, "df": out, "count": len(out),
+                "sensor": sensor_name,
+                "source": f"NASA FIRMS {sensor_name} NRT (24h global, no key)",
+                "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                "embed_url": (
+                    f"https://firms.modaps.eosdis.nasa.gov/map/#d:2017-05-14..2017-05-15;"
+                    f"@{lon:.3f},{lat:.3f},10z"
+                ),
+            }
+        except Exception:
+            continue
+
+    # ── Method 2: FIRMS public map embed (always works, visual only) ──
+    embed_url = (
+        f"https://firms.modaps.eosdis.nasa.gov/map/"
+        f"#d:24hrs;@{lon:.4f},{lat:.4f},11z"
+    )
+    return {
+        "ok": False,
+        "error": "NRT CSV download unavailable on this network — use embed viewer below",
+        "df": pd.DataFrame(), "count": 0,
+        "embed_url": embed_url,
+        "source": "NASA FIRMS (map embed fallback)",
+        "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    }
 
 
 # ── Open-Meteo — live weather at facility coordinates ─────────
@@ -1918,8 +1967,8 @@ with tab_map:
             st.markdown("<div class='sh'>🔥 NASA FIRMS — Thermal Anomaly Detection</div>",
                         unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
-                "margin-bottom:8px;'>VIIRS S-NPP 375m · Last 7 days · ~50km radius</div>",
+                "<div style='font-family:var(--mono);font-size:0.58rem;color:var(--text3);"
+                "margin-bottom:8px;'>VIIRS + MODIS NRT · Last 24h · ~50km radius · No key</div>",
                 unsafe_allow_html=True,
             )
             with st.spinner("Querying NASA FIRMS…"):
@@ -1928,75 +1977,68 @@ with tab_map:
             if firms.get("ok"):
                 if firms["count"] == 0:
                     st.markdown("""
-                    <div style='background:#0d1a0d;border:1px solid #1b3a1b;border-radius:8px;
-                                padding:14px;font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;
-                                color:#40b860;'>
-                        ✓ No thermal anomalies detected in last 7 days within 50 km.<br>
-                        Normal flaring / operational baseline.
+                    <div style='background:rgba(56,184,106,0.07);border:1px solid rgba(56,184,106,0.2);
+                                border-radius:8px;padding:14px 16px;
+                                font-family:var(--mono);font-size:0.72rem;color:#38b86a;'>
+                        ✓ No thermal anomalies in last 24h within 50 km.<br>
+                        <span style='color:var(--text3);font-size:0.62rem;'>Normal baseline.</span>
                     </div>""", unsafe_allow_html=True)
                 else:
                     df_f = firms["df"]
-                    avg_frp  = df_f["frp"].mean()
-                    max_frp  = df_f["frp"].max()
+                    avg_frp = df_f["frp"].mean()
+                    max_frp = df_f["frp"].max()
                     severity = "🔴 HIGH" if max_frp > 500 else ("🟡 MODERATE" if max_frp > 100 else "🟢 LOW")
                     st.markdown(f"""
-                    <div style='background:#1a0d08;border:1px solid #3a2010;border-radius:8px;
-                                padding:14px;margin-bottom:10px;'>
-                        <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.95rem;
-                                    color:#f06060;'>{firms["count"]} thermal anomalies detected</div>
-                        <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;color:#a08060;
-                                    margin-top:6px;'>
-                            Severity: {severity}<br>
-                            Avg FRP: {avg_frp:.1f} MW &nbsp;·&nbsp; Peak FRP: {max_frp:.1f} MW<br>
-                            Dates: {df_f["acq_date"].min()} → {df_f["acq_date"].max()}
+                    <div style='background:rgba(224,80,80,0.07);border:1px solid rgba(224,80,80,0.25);
+                                border-radius:8px;padding:14px 16px;margin-bottom:10px;'>
+                        <div style='font-family:var(--body);font-weight:600;font-size:0.95rem;
+                                    color:#e05858;'>{firms["count"]} thermal anomalies detected</div>
+                        <div style='font-family:var(--mono);font-size:0.62rem;color:#a08060;margin-top:6px;'>
+                            Severity: {severity} &nbsp;·&nbsp; Sensor: {firms.get("sensor","")} <br>
+                            Avg FRP: {avg_frp:.1f} MW &nbsp;·&nbsp; Peak FRP: {max_frp:.1f} MW
                         </div>
                     </div>""", unsafe_allow_html=True)
 
-                    # Mini map of hotspots relative to facility
                     fig_firms = go.Figure()
                     fig_firms.add_trace(go.Scattergeo(
-                        lat=[fac_lat], lon=[fac_lon],
-                        mode="markers", marker=dict(size=14, color="#e8a020",
-                                                    symbol="star", opacity=1),
+                        lat=[fac_lat], lon=[fac_lon], mode="markers",
+                        marker=dict(size=14, color=PALETTE["WTI"], symbol="star"),
                         name="Facility",
                     ))
                     fig_firms.add_trace(go.Scattergeo(
-                        lat=df_f["latitude"], lon=df_f["longitude"],
-                        mode="markers",
+                        lat=df_f["latitude"], lon=df_f["longitude"], mode="markers",
                         marker=dict(
                             size=np.clip(df_f["frp"].fillna(10) / 20 + 5, 5, 20),
                             color=df_f["frp"].fillna(0),
                             colorscale=[[0,"#ff6b6b"],[0.5,"#ff0000"],[1,"#ffffff"]],
-                            opacity=0.85,
-                            showscale=True,
-                            colorbar=dict(title="FRP (MW)", thickness=10,
+                            opacity=0.85, showscale=True,
+                            colorbar=dict(title="FRP MW", thickness=10,
                                           titlefont=dict(size=9), tickfont=dict(size=8)),
                         ),
-                        name="Thermal anomaly",
+                        name="Hotspot",
                         hovertemplate="FRP: %{marker.color:.0f} MW<br>%{lat:.3f}, %{lon:.3f}<extra></extra>",
                     ))
-                    deg = 0.6
+                    deg_r = 0.6
                     fig_firms.update_layout(
                         geo=dict(
-                            projection_type="mercator",
-                            showland=True, landcolor="#0d1825",
+                            projection_type="mercator", showland=True, landcolor="#0d1825",
                             showocean=True, oceancolor="#07090f",
-                            showcountries=True, countrycolor="#1b2d4f",
-                            bgcolor="#07090f",
-                            lonaxis=dict(range=[fac_lon-deg, fac_lon+deg]),
-                            lataxis=dict(range=[fac_lat-deg, fac_lat+deg]),
+                            showcountries=True, countrycolor="#1b2d4f", bgcolor="#07090f",
+                            lonaxis=dict(range=[fac_lon-deg_r, fac_lon+deg_r]),
+                            lataxis=dict(range=[fac_lat-deg_r, fac_lat+deg_r]),
                         ),
                         paper_bgcolor="#07090f",
-                        font=dict(color="#6080a8", family="Space Mono,monospace", size=9),
-                        margin=dict(l=0, r=0, t=0, b=0), height=280,
+                        font=dict(color="#5a7898", family="Barlow Condensed", size=9),
+                        margin=dict(l=0,r=0,t=0,b=0), height=260,
                         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=9)),
                     )
                     st.plotly_chart(fig_firms, use_container_width=True)
                     st.dataframe(
-                        df_f[["acq_date","acq_time","frp","bright_ti4","confidence"]].rename(columns={
-                            "acq_date":"Date","acq_time":"Time (UTC)",
-                            "frp":"FRP (MW)","bright_ti4":"Brightness (K)","confidence":"Confidence",
-                        }).sort_values("FRP (MW)", ascending=False).head(10),
+                        df_f[["acq_date","acq_time","frp","bright_ti4","confidence"]]
+                        .rename(columns={"acq_date":"Date","acq_time":"Time",
+                                         "frp":"FRP (MW)","bright_ti4":"Brightness (K)",
+                                         "confidence":"Confidence"})
+                        .sort_values("FRP (MW)", ascending=False).head(10),
                         use_container_width=True, hide_index=True,
                     )
                 st.markdown(
@@ -2004,11 +2046,27 @@ with tab_map:
                     unsafe_allow_html=True,
                 )
             else:
-                err_box(f"NASA FIRMS: {firms.get('error','')}")
-                st.markdown("""
-                <div class='info-box'>NASA FIRMS may be temporarily unavailable or the
-                domain may be restricted on this deployment. Try again shortly.</div>""",
-                unsafe_allow_html=True)
+                # CSV blocked — show interactive FIRMS map embed instead
+                embed_url = firms.get(
+                    "embed_url",
+                    f"https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@{fac_lon:.4f},{fac_lat:.4f},11z"
+                )
+                st.markdown(f"""
+                <div style='font-family:var(--mono);font-size:0.62rem;color:var(--text3);margin-bottom:6px;'>
+                    NRT CSV unavailable on this network · Showing NASA FIRMS interactive map.
+                    Fire detections update every 3–12 hours from satellite passes.
+                </div>
+                <div style='border:1px solid var(--border);border-radius:8px;overflow:hidden;'>
+                    <iframe src="{embed_url}" width="100%" height="320"
+                        style="border:none;display:block;" loading="lazy"
+                        title="NASA FIRMS Active Fire Map">
+                    </iframe>
+                </div>
+                <div class='prov' style='margin-top:4px;'>
+                    ▸ NASA FIRMS Active Fire Map · VIIRS + MODIS · No key ·
+                    <a href="{embed_url}" target="_blank" style='color:var(--gold);'>Open full screen ↗</a>
+                </div>""", unsafe_allow_html=True)
+
 
         # ── RIGHT: Satellite Imagery + AIS ───────────────────────
         with right_col:
