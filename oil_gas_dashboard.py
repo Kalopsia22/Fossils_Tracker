@@ -200,7 +200,7 @@ PLOTLY_LAYOUT = dict(
     font=dict(family="Space Mono, monospace", color="#8aa8c8", size=11),
     xaxis=dict(gridcolor="#1a2840", zerolinecolor="#1a2840", showgrid=True),
     yaxis=dict(gridcolor="#1a2840", zerolinecolor="#1a2840", showgrid=True),
-    margin=dict(l=50, r=20, t=40, b=40),
+
     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
 )
 
@@ -473,7 +473,7 @@ with tab_prices:
                 name=primary, increasing_line_color="#5ecb80", decreasing_line_color="#e05c5c",
             ))
 
-        fig.update_layout(**PLOTLY_LAYOUT, title=f"Crude Oil Prices — USD/bbl ({lookback}d)", height=380)
+        fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title=f"Crude Oil Prices — USD/bbl ({lookback}d)", height=380)
         st.plotly_chart(fig, use_container_width=True)
 
         # Volume chart
@@ -501,7 +501,7 @@ with tab_prices:
             ))
             sp_fig.add_hline(y=spread_series.mean(), line_dash="dash", line_color="rgba(245,166,35,0.5)",
                              annotation_text=f"Avg ${spread_series.mean():.2f}")
-            sp_fig.update_layout(**PLOTLY_LAYOUT, title="Brent–WTI Spread ($/bbl)", height=250)
+            sp_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="Brent–WTI Spread ($/bbl)", height=250)
             st.plotly_chart(sp_fig, use_container_width=True)
 
         with c2:
@@ -511,7 +511,7 @@ with tab_prices:
                 pct_fig.add_trace(go.Scatter(x=crude_df["date"], y=pct, name=col,
                                              line=dict(color=COLORS[col], width=1.8)))
             pct_fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.13)")
-            pct_fig.update_layout(**PLOTLY_LAYOUT, title=f"% Return from Period Start", height=250)
+            pct_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title=f"% Return from Period Start", height=250)
             st.plotly_chart(pct_fig, use_container_width=True)
 
 # ╔══════════════════════════════════════════════╗
@@ -540,7 +540,7 @@ with tab_natgas:
                         name=f"{hub} {ma_period}MA",
                         line=dict(color=NG_COLORS[hub], width=1.2, dash="dot"),
                     ))
-        ng_fig.update_layout(**PLOTLY_LAYOUT, title="Natural Gas Prices", height=380,
+        ng_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="Natural Gas Prices", height=380,
                              yaxis_title="USD/MMBtu or EUR/MWh")
         st.plotly_chart(ng_fig, use_container_width=True)
 
@@ -553,7 +553,7 @@ with tab_natgas:
             x=bar_hubs, y=bar_vals, marker_color=bar_colors,
             text=[f"{v:.2f}" for v in bar_vals], textposition="outside",
         ))
-        bar_fig.update_layout(**PLOTLY_LAYOUT, title="Latest Price by Hub", height=280,
+        bar_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="Latest Price by Hub", height=280,
                               yaxis_title="Price", showlegend=False)
         st.plotly_chart(bar_fig, use_container_width=True)
 
@@ -572,7 +572,7 @@ with tab_natgas:
             text=[[f"${v:.2f}" for v in row] for row in pivot.values],
             texttemplate="%{text}", showscale=True,
         ))
-        heat_fig.update_layout(**PLOTLY_LAYOUT, title="Henry Hub Monthly Avg ($/MMBtu)", height=220)
+        heat_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="Henry Hub Monthly Avg ($/MMBtu)", height=220)
         st.plotly_chart(heat_fig, use_container_width=True)
 
         # US Natural Gas storage
@@ -584,7 +584,7 @@ with tab_natgas:
                                       fillcolor="rgba(255,107,107,0.1)"))
         stor_fig.add_trace(go.Scatter(x=storage_df["date"], y=storage_df["5-Year Avg"],
                                       name="5-Year Avg", line=dict(color="#feca57", width=1.5, dash="dash")))
-        stor_fig.update_layout(**PLOTLY_LAYOUT, title="US Natural Gas Storage (Bcf)", height=280)
+        stor_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="US Natural Gas Storage (Bcf)", height=280)
         st.plotly_chart(stor_fig, use_container_width=True)
 
 # ╔══════════════════════════════════════════════╗
@@ -665,7 +665,7 @@ with tab_supply:
             text=[f"{v:,} kb/d" for v in prod_sorted["Production_kbd"]],
             textposition="outside",
         ))
-        bar_h.update_layout(**PLOTLY_LAYOUT, title="Production by Country (kb/d)", height=420,
+        bar_h.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="Production by Country (kb/d)", height=420,
                             xaxis_title="Thousand Barrels/Day", showlegend=False)
         st.plotly_chart(bar_h, use_container_width=True)
 
@@ -724,7 +724,7 @@ with tab_inventory:
         x=inv_df["date"], y=inv_df[inv_metric].rolling(28).mean(),
         name="28d MA", line=dict(color="rgba(255,255,255,0.31)", width=1.2, dash="dot"),
     ))
-    inv_fig.update_layout(**PLOTLY_LAYOUT, title=f"US {inv_metric} Inventory (MMbbl)", height=320,
+    inv_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title=f"US {inv_metric} Inventory (MMbbl)", height=320,
                           yaxis_title="Million Barrels")
     st.plotly_chart(inv_fig, use_container_width=True)
 
@@ -782,7 +782,7 @@ with tab_margins:
                                            y=margin_df[col].rolling(ma_period).mean(),
                                            name=f"{col[:3]} {ma_period}MA",
                                            line=dict(color=color, width=1.2, dash="dot")))
-    crack_fig.update_layout(**PLOTLY_LAYOUT, title="3-2-1 Crack Spread ($/bbl)", height=350)
+    crack_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="3-2-1 Crack Spread ($/bbl)", height=350)
     st.plotly_chart(crack_fig, use_container_width=True)
 
     # Spread distribution
@@ -791,7 +791,7 @@ with tab_margins:
                                     marker_color="rgba(245,166,35,0.5)", nbinsx=30))
     dist_fig.add_trace(go.Histogram(x=margin_df["Brent 3-2-1 Crack"], name="Brent",
                                     marker_color="rgba(78,205,196,0.5)", nbinsx=30))
-    dist_fig.update_layout(**PLOTLY_LAYOUT, barmode="overlay",
+    dist_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  barmode="overlay",
                            title="Crack Spread Distribution (period)", height=260)
     st.plotly_chart(dist_fig, use_container_width=True)
 
@@ -811,7 +811,7 @@ with tab_analytics:
             roll_vol = crude_df[col].pct_change().rolling(30).std() * np.sqrt(252) * 100
             vol_fig.add_trace(go.Scatter(x=crude_df["date"], y=roll_vol, name=col,
                                          line=dict(color=COLORS[col], width=1.8)))
-        vol_fig.update_layout(**PLOTLY_LAYOUT, height=280, yaxis_title="Annualized Vol (%)")
+        vol_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  height=280, yaxis_title="Annualized Vol (%)")
         st.plotly_chart(vol_fig, use_container_width=True)
 
     with a2:
@@ -847,7 +847,7 @@ with tab_analytics:
                                   line=dict(color="#c77dff", width=1.8),
                                   fillcolor="rgba(199,125,255,0.07)"))
     rc_fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.13)")
-    rc_fig.update_layout(**PLOTLY_LAYOUT, title="30-Day Rolling Correlation: WTI vs Henry Hub",
+    rc_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="30-Day Rolling Correlation: WTI vs Henry Hub",
                          height=220, yaxis=dict(range=[-1, 1], **PLOTLY_LAYOUT["yaxis"]))
     st.plotly_chart(rc_fig, use_container_width=True)
 
@@ -875,7 +875,7 @@ with tab_analytics:
                                 name="Median", line=dict(color="#f5a623", width=2)))
     mc_fig.add_trace(go.Scatter(x=fwd_dates, y=np.percentile(paths, 10, axis=1),
                                 name="10th Pctile", line=dict(color="#e05c5c", width=2, dash="dot")))
-    mc_fig.update_layout(**PLOTLY_LAYOUT, title=f"WTI Monte Carlo ({n_paths} paths, GBM)",
+    mc_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title=f"WTI Monte Carlo ({n_paths} paths, GBM)",
                          height=300, yaxis_title="USD/bbl")
     st.plotly_chart(mc_fig, use_container_width=True)
 
