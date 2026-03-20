@@ -847,8 +847,9 @@ with tab_analytics:
                                   line=dict(color="#c77dff", width=1.8),
                                   fillcolor="rgba(199,125,255,0.07)"))
     rc_fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.13)")
-    rc_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),  title="30-Day Rolling Correlation: WTI vs Henry Hub",
-                         height=220, yaxis=dict(range=[-1, 1], **PLOTLY_LAYOUT["yaxis"]))
+    rc_fig.update_layout(**PLOTLY_LAYOUT, margin=dict(l=50, r=20, t=40, b=40),
+                         title="30-Day Rolling Correlation: WTI vs Henry Hub", height=220)
+    rc_fig.update_yaxes(range=[-1, 1])
     st.plotly_chart(rc_fig, use_container_width=True)
 
     # Monte Carlo forward price simulation
