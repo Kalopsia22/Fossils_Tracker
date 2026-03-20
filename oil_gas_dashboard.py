@@ -485,6 +485,17 @@ def backtest_ma_crossover(series: pd.Series, fast: int = 20, slow: int = 50) -> 
     return df.dropna(subset=["fast_ma", "slow_ma"])
 
 # ═══════════════════════════════════════════════════════════════
+# API KEYS — loaded from .streamlit/secrets.toml
+# Add these keys to Streamlit Cloud via Settings → Secrets:
+#   FRED_KEY = "..."   → fred.stlouisfed.org/docs/api/api_key.html
+#   AV_KEY   = "..."   → alphavantage.co/support/#api-key
+#   NEWS_KEY = "..."   → newsapi.org/register
+# ═══════════════════════════════════════════════════════════════
+fred_key = st.secrets.get("FRED_KEY", "") if hasattr(st, "secrets") else ""
+av_key   = st.secrets.get("AV_KEY",   "") if hasattr(st, "secrets") else ""
+news_key = st.secrets.get("NEWS_KEY", "") if hasattr(st, "secrets") else ""
+
+# ═══════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -495,17 +506,6 @@ with st.sidebar:
         <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#3a5a88;letter-spacing:0.15em;'>MULTI-SOURCE · LIVE DATA</div>
     </div>
     """, unsafe_allow_html=True)
-
-    st.markdown("<div class='sh'>🔑 API Keys</div>", unsafe_allow_html=True)
-    st.markdown("<div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#2a4060;margin-bottom:8px;'>Store in .streamlit/secrets.toml for Cloud</div>", unsafe_allow_html=True)
-
-    def _key(label, secret, url):
-        val = st.secrets.get(secret, "") if hasattr(st, "secrets") else ""
-        return st.text_input(label, value=val, type="password", help=f"Free key at {url}")
-
-    fred_key = _key("FRED API Key",      "FRED_KEY", "fred.stlouisfed.org/docs/api/api_key.html")
-    av_key   = _key("Alpha Vantage Key", "AV_KEY",   "alphavantage.co/support/#api-key")
-    news_key = _key("NewsAPI Key",       "NEWS_KEY", "newsapi.org/register")
 
     st.markdown("<div class='sh'>⚙ Global Controls</div>", unsafe_allow_html=True)
     period_map   = {"1 Month":"1mo","3 Months":"3mo","6 Months":"6mo","1 Year":"1y","2 Years":"2y","5 Years":"5y"}
