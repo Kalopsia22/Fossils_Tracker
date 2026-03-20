@@ -1951,10 +1951,12 @@ with tab_map:
         # ════════════════════════════════════════════
         # PANEL COLUMNS: left = data, right = visuals
         # ════════════════════════════════════════════
-        left_col, right_col = st.columns([1, 1], gap="large")
+        # ── Intelligence Panel — tabbed layout (no column height overlap) ───
+        panel_tab1, panel_tab2, panel_tab3, panel_tab4 = st.tabs([
+            "🌤 Weather", "🔥 NASA FIRMS", "🛰 Satellite", "🚢 AIS Tracking"
+        ])
 
-        # ── LEFT: Weather + NASA FIRMS ───────────────────────────
-        with left_col:
+        with panel_tab1:
 
             # ── Live Weather ────────────────────────────────────
             st.markdown("<div class='sh'>🌤 Live Weather — Open-Meteo</div>", unsafe_allow_html=True)
@@ -2005,6 +2007,8 @@ with tab_map:
             else:
                 err_box(f"Weather: {wx.get('error','')}")
 
+
+        with panel_tab2:
             # ── NASA FIRMS Thermal Anomalies ─────────────────────
             st.markdown("<div class='sh'>🔥 NASA FIRMS — Thermal Anomaly Detection</div>",
                         unsafe_allow_html=True)
@@ -2111,8 +2115,8 @@ with tab_map:
                 </div>""", unsafe_allow_html=True)
 
 
-        # ── RIGHT: Satellite Imagery + AIS ───────────────────────
-        with right_col:
+
+        with panel_tab3:
 
             # ── Satellite Imagery ────────────────────────────────
             st.markdown("<div class='sh'>🛰 Satellite Imagery</div>", unsafe_allow_html=True)
@@ -2201,6 +2205,8 @@ with tab_map:
                 </a>
             </div>""", unsafe_allow_html=True)
 
+
+        with panel_tab4:
             # ── AIS Vessel Tracking ──────────────────────────────
             st.markdown("<div class='sh'>🚢 AIS Live Vessel Tracking — MarineTraffic</div>",
                         unsafe_allow_html=True)
@@ -2228,6 +2234,7 @@ with tab_map:
                 <a href="https://www.marinetraffic.com/en/ais/home/centerx:{fac_lon:.3f}/centery:{fac_lat:.3f}/zoom:{ais_zoom}"
                 target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
             </div>""", unsafe_allow_html=True)
+
 
         # ── Facility Detail Cards — inside if block, after columns ────────────
         st.markdown("<br><br>", unsafe_allow_html=True)
