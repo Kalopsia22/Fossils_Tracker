@@ -481,10 +481,10 @@ with tab_prices:
             vol_fig = go.Figure()
             if "WTI" in commodity:
                 vol_fig.add_trace(go.Bar(x=crude_df["date"], y=crude_df["vol_wti"],
-                                         name="WTI Volume", marker_color="#f5a62340"))
+                                         name="WTI Volume", marker_color="rgba(245,166,35,0.25)"))
             if "Brent" in commodity:
                 vol_fig.add_trace(go.Bar(x=crude_df["date"], y=crude_df["vol_brent"],
-                                         name="Brent Volume", marker_color="#4ecdc440"))
+                                         name="Brent Volume", marker_color="rgba(78,205,196,0.25)"))
             vol_fig.update_layout(**PLOTLY_LAYOUT, title="Trading Volume (contracts)", height=180,
                                   margin=dict(l=50, r=20, t=30, b=30))
             st.plotly_chart(vol_fig, use_container_width=True)
@@ -499,7 +499,7 @@ with tab_prices:
                 line=dict(color="#4ecdc4", width=1.8),
                 fillcolor="rgba(78,205,196,0.08)", name="Brent–WTI Spread",
             ))
-            sp_fig.add_hline(y=spread_series.mean(), line_dash="dash", line_color="#f5a62380",
+            sp_fig.add_hline(y=spread_series.mean(), line_dash="dash", line_color="rgba(245,166,35,0.5)",
                              annotation_text=f"Avg ${spread_series.mean():.2f}")
             sp_fig.update_layout(**PLOTLY_LAYOUT, title="Brent–WTI Spread ($/bbl)", height=250)
             st.plotly_chart(sp_fig, use_container_width=True)
@@ -510,7 +510,7 @@ with tab_prices:
                 pct = (crude_df[col] / crude_df[col].iloc[0] - 1) * 100
                 pct_fig.add_trace(go.Scatter(x=crude_df["date"], y=pct, name=col,
                                              line=dict(color=COLORS[col], width=1.8)))
-            pct_fig.add_hline(y=0, line_dash="dot", line_color="#ffffff20")
+            pct_fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.13)")
             pct_fig.update_layout(**PLOTLY_LAYOUT, title=f"% Return from Period Start", height=250)
             st.plotly_chart(pct_fig, use_container_width=True)
 
@@ -609,13 +609,13 @@ with tab_map:
             mode="markers+text",
             text=grp["Field"],
             textposition="top center",
-            textfont=dict(size=9, color="#ffffff80"),
+            textfont=dict(size=9, color="rgba(255,255,255,0.5)"),
             marker=dict(
                 size=grp["Reserves_Gboe"].clip(upper=500) / 12 + 8,
                 color=color_map[ftype],
                 symbol=symbol_map[ftype],
                 opacity=0.85,
-                line=dict(width=1, color="#ffffff30"),
+                line=dict(width=1, color="rgba(255,255,255,0.19)"),
             ),
             name=ftype,
             hovertemplate="<b>%{text}</b><br>Reserves: %{customdata[0]:,.0f} Gboe<br>Country: %{customdata[1]}<extra></extra>",
@@ -722,7 +722,7 @@ with tab_inventory:
     # 4-week MA
     inv_fig.add_trace(go.Scatter(
         x=inv_df["date"], y=inv_df[inv_metric].rolling(28).mean(),
-        name="28d MA", line=dict(color="#ffffff50", width=1.2, dash="dot"),
+        name="28d MA", line=dict(color="rgba(255,255,255,0.31)", width=1.2, dash="dot"),
     ))
     inv_fig.update_layout(**PLOTLY_LAYOUT, title=f"US {inv_metric} Inventory (MMbbl)", height=320,
                           yaxis_title="Million Barrels")
@@ -777,7 +777,7 @@ with tab_margins:
     crack_fig.add_trace(go.Scatter(x=margin_df["date"], y=margin_df["Brent 3-2-1 Crack"],
                                    name="Brent 3-2-1", line=dict(color="#4ecdc4", width=2)))
     if show_ma:
-        for col, color in [("WTI 3-2-1 Crack", "#f5a62380"), ("Brent 3-2-1 Crack", "#4ecdc480")]:
+        for col, color in [("WTI 3-2-1 Crack", "rgba(245,166,35,0.5)"), ("Brent 3-2-1 Crack", "rgba(78,205,196,0.5)")]:
             crack_fig.add_trace(go.Scatter(x=margin_df["date"],
                                            y=margin_df[col].rolling(ma_period).mean(),
                                            name=f"{col[:3]} {ma_period}MA",
@@ -788,9 +788,9 @@ with tab_margins:
     # Spread distribution
     dist_fig = go.Figure()
     dist_fig.add_trace(go.Histogram(x=margin_df["WTI 3-2-1 Crack"], name="WTI",
-                                    marker_color="#f5a62380", nbinsx=30))
+                                    marker_color="rgba(245,166,35,0.5)", nbinsx=30))
     dist_fig.add_trace(go.Histogram(x=margin_df["Brent 3-2-1 Crack"], name="Brent",
-                                    marker_color="#4ecdc480", nbinsx=30))
+                                    marker_color="rgba(78,205,196,0.5)", nbinsx=30))
     dist_fig.update_layout(**PLOTLY_LAYOUT, barmode="overlay",
                            title="Crack Spread Distribution (period)", height=260)
     st.plotly_chart(dist_fig, use_container_width=True)
@@ -846,7 +846,7 @@ with tab_analytics:
     rc_fig = go.Figure(go.Scatter(x=crude_df["date"], y=rc, fill="tozeroy",
                                   line=dict(color="#c77dff", width=1.8),
                                   fillcolor="rgba(199,125,255,0.07)"))
-    rc_fig.add_hline(y=0, line_dash="dash", line_color="#ffffff20")
+    rc_fig.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.13)")
     rc_fig.update_layout(**PLOTLY_LAYOUT, title="30-Day Rolling Correlation: WTI vs Henry Hub",
                          height=220, yaxis=dict(range=[-1, 1], **PLOTLY_LAYOUT["yaxis"]))
     st.plotly_chart(rc_fig, use_container_width=True)
