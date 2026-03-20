@@ -95,141 +95,415 @@ st.set_page_config(
 # ═══════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+/* ══════════════════════════════════════════════════════
+   FONTS
+   Bebas Neue  — industrial display headers
+   Barlow      — clean, readable body & UI text
+   Barlow Condensed — compact labels & metadata
+══════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Barlow+Condensed:wght@300;400;500;600;700&display=swap');
 
-html, body, [class*="css"] { font-family: 'Syne', sans-serif; }
-.stApp { background: #07090f; color: #dde3ee; }
-
-section[data-testid="stSidebar"] {
-    background: #0b0e18 !important;
-    border-right: 1px solid #161d30;
+/* ══════════════════════════════════════════════════════
+   CSS VARIABLES
+══════════════════════════════════════════════════════ */
+:root {
+    --bg:          #080b12;
+    --bg2:         #0c1018;
+    --bg3:         #101520;
+    --panel:       #121822;
+    --panel2:      #161e2c;
+    --border:      #1e2d46;
+    --border2:     #243450;
+    --gold:        #d4963a;
+    --gold2:       #f0b84a;
+    --amber:       #e8a020;
+    --teal:        #2eb8a0;
+    --red:         #e05050;
+    --green:       #38b86a;
+    --blue:        #4a8cc8;
+    --muted:       #5a7898;
+    --text:        #c8d8e8;
+    --text2:       #8aaccc;
+    --text3:       #4a6a8a;
+    --display:     'Bebas Neue', sans-serif;
+    --body:        'Barlow', sans-serif;
+    --mono:        'Barlow Condensed', sans-serif;
 }
+
+/* ══════════════════════════════════════════════════════
+   BASE
+══════════════════════════════════════════════════════ */
+html, body, [class*="css"], p, div, span, label, input, select, textarea, button {
+    font-family: var(--body) !important;
+}
+
+/* Rich textured background — dark slate with subtle radial glow */
+.stApp {
+    background:
+        radial-gradient(ellipse 80% 50% at 20% 0%, rgba(30,60,100,0.18) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(80,40,10,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 100% 100% at 50% 50%, #080b12 0%, #050810 100%);
+    color: var(--text);
+    min-height: 100vh;
+}
+
+/* Fine grain texture overlay */
+.stApp::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+}
+
+/* ══════════════════════════════════════════════════════
+   SIDEBAR
+══════════════════════════════════════════════════════ */
+section[data-testid="stSidebar"] {
+    background:
+        linear-gradient(180deg, #0a0f1a 0%, #080c15 100%) !important;
+    border-right: 1px solid var(--border) !important;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+}
+section[data-testid="stSidebar"] * {
+    font-family: var(--body) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   METRICS
+══════════════════════════════════════════════════════ */
 div[data-testid="metric-container"] {
-    background: linear-gradient(135deg, #0e1525 0%, #111c32 100%);
-    border: 1px solid #1b2d4f;
-    border-radius: 8px;
-    padding: 14px 18px !important;
+    background: linear-gradient(135deg, var(--panel) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--gold);
+    border-radius: 10px;
+    padding: 16px 20px !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.35), inset 0 1px 0 rgba(212,150,58,0.08);
+    transition: border-color 0.2s;
+}
+div[data-testid="metric-container"]:hover {
+    border-top-color: var(--gold2);
+    box-shadow: 0 6px 28px rgba(0,0,0,0.45), 0 0 0 1px rgba(212,150,58,0.1);
 }
 div[data-testid="metric-container"] label {
-    font-family: 'Space Mono', monospace !important;
-    font-size: 0.62rem !important;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: #4a6fa5 !important;
+    font-family: var(--mono) !important;
+    font-size: 0.64rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.18em !important;
+    text-transform: uppercase !important;
+    color: var(--muted) !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    font-family: 'Syne', sans-serif !important;
-    font-size: 1.65rem !important;
-    font-weight: 800;
-    color: #e8dfc8 !important;
+    font-family: var(--display) !important;
+    font-size: 2rem !important;
+    font-weight: 400 !important;
+    color: var(--text) !important;
+    letter-spacing: 0.04em;
+    line-height: 1.1;
+}
+div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
+    font-family: var(--mono) !important;
+    font-size: 0.72rem !important;
+    font-weight: 500 !important;
 }
 div[data-testid="metric-container"] [data-testid="stMetricDelta"] svg { display: none; }
+
+/* ══════════════════════════════════════════════════════
+   TABS
+══════════════════════════════════════════════════════ */
+div[data-testid="stTabs"] {
+    border-bottom: 1px solid var(--border);
+}
 div[data-testid="stTabs"] button {
-    font-family: 'Space Mono', monospace !important;
-    font-size: 0.68rem !important;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #3a5a88 !important;
+    font-family: var(--mono) !important;
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+    color: var(--text3) !important;
+    padding: 10px 16px !important;
+    transition: color 0.15s !important;
+}
+div[data-testid="stTabs"] button:hover {
+    color: var(--text2) !important;
 }
 div[data-testid="stTabs"] button[aria-selected="true"] {
-    color: #e8a020 !important;
-    border-bottom: 2px solid #e8a020 !important;
+    color: var(--gold2) !important;
+    border-bottom: 2px solid var(--gold2) !important;
     background: transparent !important;
 }
+
+/* ══════════════════════════════════════════════════════
+   INPUTS & WIDGETS
+══════════════════════════════════════════════════════ */
+label[data-testid="stWidgetLabel"] p,
+label[data-testid="stWidgetLabel"] {
+    font-family: var(--mono) !important;
+    font-size: 0.66rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.12em !important;
+    color: var(--text3) !important;
+}
+div[data-testid="stSelectbox"] > div,
+div[data-testid="stMultiSelect"] > div {
+    background: var(--panel2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+    font-family: var(--body) !important;
+}
+div[data-baseweb="select"] * {
+    font-family: var(--body) !important;
+    font-size: 0.85rem !important;
+}
+div[data-testid="stSlider"] * {
+    font-family: var(--mono) !important;
+}
+div[data-testid="stSlider"] [data-testid="stTickBar"] {
+    display: none;
+}
+div[data-testid="stTextInput"] input {
+    background: var(--panel2) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    border-radius: 6px !important;
+    font-family: var(--body) !important;
+}
+div[data-testid="stRadio"] label {
+    font-family: var(--body) !important;
+    font-size: 0.85rem !important;
+    color: var(--text2) !important;
+}
+div[data-testid="stToggle"] label {
+    font-family: var(--body) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   DATAFRAME
+══════════════════════════════════════════════════════ */
+div[data-testid="stDataFrame"] * {
+    font-family: var(--mono) !important;
+    font-size: 0.78rem !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   DOWNLOAD BUTTON
+══════════════════════════════════════════════════════ */
+div[data-testid="stDownloadButton"] button {
+    background: var(--panel2) !important;
+    border: 1px solid var(--border2) !important;
+    color: var(--blue) !important;
+    font-family: var(--mono) !important;
+    font-size: 0.65rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    border-radius: 6px !important;
+    transition: all 0.15s !important;
+}
+div[data-testid="stDownloadButton"] button:hover {
+    border-color: var(--blue) !important;
+    background: rgba(74,140,200,0.1) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   EXPANDER
+══════════════════════════════════════════════════════ */
+div[data-testid="stExpander"] {
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    background: var(--panel) !important;
+}
+div[data-testid="stExpander"] summary {
+    font-family: var(--mono) !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: var(--text2) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   SPINNER
+══════════════════════════════════════════════════════ */
+div[data-testid="stSpinner"] p {
+    font-family: var(--mono) !important;
+    font-size: 0.72rem !important;
+    color: var(--muted) !important;
+    letter-spacing: 0.08em !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   CUSTOM COMPONENTS
+══════════════════════════════════════════════════════ */
 .sh {
-    font-family: 'Syne', sans-serif;
-    font-weight: 700;
-    font-size: 0.78rem;
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: 1.05rem;
     letter-spacing: 0.12em;
-    color: #c8a060;
+    color: var(--gold);
     text-transform: uppercase;
-    padding-bottom: 6px;
-    border-bottom: 1px solid #161d30;
-    margin: 1.2rem 0 0.8rem;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    margin: 1.4rem 0 1rem;
+    line-height: 1;
 }
+
 .prov {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.58rem;
-    color: #2a4060;
-    letter-spacing: 0.08em;
-    margin-top: 2px;
-}
-.err-box {
-    background: #1a0808;
-    border-left: 3px solid #c0392b;
-    border-radius: 0 6px 6px 0;
-    padding: 10px 14px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.72rem;
-    color: #e07070;
-    margin: 6px 0 10px;
-}
-.info-box {
-    background: #0d1825;
-    border-left: 3px solid #e8a020;
-    border-radius: 0 6px 6px 0;
-    padding: 12px 16px;
-    font-size: 0.84rem;
-    color: #8aaccc;
-    margin: 6px 0 12px;
-}
-.news-card {
-    background: #0d1220;
-    border: 1px solid #161d30;
-    border-radius: 8px;
-    padding: 14px 16px;
-    margin-bottom: 10px;
-}
-.news-title { font-weight: 700; font-size: 0.9rem; color: #dde3ee; margin-bottom: 4px; }
-.news-meta  { font-family: 'Space Mono', monospace; font-size: 0.6rem; color: #3a5a88; }
-.news-desc  { font-size: 0.8rem; color: #7a9ab8; margin-top: 6px; }
-.hero {
-    background: linear-gradient(135deg, #0a1020 0%, #0f1d38 60%, #0a1020 100%);
-    border: 1px solid #1b2d4f;
-    border-radius: 10px;
-    padding: 20px 26px;
-    margin-bottom: 18px;
-}
-.hero-title { font-weight: 800; font-size: 1.7rem; color: #e8dfc8; line-height: 1.1; }
-.hero-sub {
-    font-family: 'Space Mono', monospace;
-    font-size: 0.62rem;
-    color: #3a5a88;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    font-weight: 400;
+    color: var(--text3);
+    letter-spacing: 0.1em;
     margin-top: 3px;
+}
+
+.err-box {
+    background: rgba(224,80,80,0.07);
+    border-left: 3px solid var(--red);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: #e07878;
+    margin: 8px 0 12px;
+}
+
+.info-box {
+    background: rgba(212,150,58,0.06);
+    border-left: 3px solid var(--gold);
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    font-family: var(--body);
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text2);
+    margin: 8px 0 14px;
+    line-height: 1.6;
+}
+
+.news-card {
+    background: linear-gradient(135deg, var(--panel) 0%, var(--panel2) 100%);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border2);
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+    transition: border-left-color 0.15s, box-shadow 0.15s;
+}
+.news-card:hover {
+    border-left-color: var(--gold);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.news-title {
+    font-family: var(--body);
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text);
+    margin-bottom: 5px;
+    line-height: 1.4;
+}
+.news-meta {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    font-weight: 500;
+    color: var(--text3);
+    letter-spacing: 0.06em;
+}
+.news-desc {
+    font-family: var(--body);
+    font-size: 0.82rem;
+    font-weight: 400;
+    color: var(--text2);
+    margin-top: 7px;
+    line-height: 1.5;
+}
+
+.hero {
+    background:
+        linear-gradient(135deg, rgba(20,35,60,0.95) 0%, rgba(15,25,50,0.98) 60%, rgba(18,30,55,0.95) 100%);
+    border: 1px solid var(--border2);
+    border-top: 2px solid var(--gold);
+    border-radius: 14px;
+    padding: 24px 30px;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(212,150,58,0.1);
+    position: relative;
+    overflow: hidden;
+}
+.hero::after {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(212,150,58,0.05) 0%, transparent 70%);
+    pointer-events: none;
+}
+.hero-title {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: 2.2rem;
+    color: var(--text);
+    line-height: 1;
+    letter-spacing: 0.06em;
+}
+.hero-sub {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    font-weight: 500;
+    color: var(--text3);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-top: 4px;
 }
 .badge {
     display: inline-block;
-    background: #111c32;
-    border: 1px solid #1b3060;
-    border-radius: 20px;
-    padding: 3px 11px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.58rem;
-    color: #4a7ab8;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: var(--text3);
     margin: 8px 4px 0 0;
-    letter-spacing: 0.08em;
-}
-.badge-live { background: #0d1f14; border-color: #1f5030; color: #40b860; }
-div[data-testid="stDownloadButton"] button {
-    background: #0d1825 !important;
-    border: 1px solid #1b2d4f !important;
-    color: #4a7ab8 !important;
-    font-family: 'Space Mono', monospace !important;
-    font-size: 0.65rem !important;
-    letter-spacing: 0.08em;
-}
-hr { border-color: #161d30; }
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: #07090f; }
-::-webkit-scrollbar-thumb { background: #161d30; border-radius: 3px; }
-label[data-testid="stWidgetLabel"] p {
-    font-family: 'Space Mono', monospace !important;
-    font-size: 0.65rem !important;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #3a5a88 !important;
+}
+.badge-live {
+    background: rgba(56,184,106,0.1);
+    border-color: rgba(56,184,106,0.3);
+    color: var(--green);
+}
+
+/* ══════════════════════════════════════════════════════
+   SCROLLBAR
+══════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+hr { border-color: var(--border); margin: 1.2rem 0; }
+
+/* ══════════════════════════════════════════════════════
+   PLOTLY CHART CONTAINER
+══════════════════════════════════════════════════════ */
+div[data-testid="stPlotlyChart"] {
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+/* ══════════════════════════════════════════════════════
+   ALERTS / INFO
+══════════════════════════════════════════════════════ */
+div[data-testid="stAlert"] {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -239,18 +513,27 @@ label[data-testid="stWidgetLabel"] p {
 # ═══════════════════════════════════════════════════════════════
 THEME = dict(
     paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(8,12,22,0.7)",
-    font=dict(family="Space Mono, monospace", color="#6080a8", size=10),
-    xaxis=dict(gridcolor="#111828", zerolinecolor="#111828", showgrid=True, linecolor="#161d30"),
-    yaxis=dict(gridcolor="#111828", zerolinecolor="#111828", showgrid=True, linecolor="#161d30"),
-    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
-    hoverlabel=dict(bgcolor="#0d1525", font_family="Space Mono, monospace", font_size=11),
+    plot_bgcolor="rgba(10,14,22,0.75)",
+    font=dict(family="Barlow Condensed, sans-serif", color="#5a7898", size=11),
+    xaxis=dict(gridcolor="#1a2438", zerolinecolor="#1a2438", showgrid=True,
+               linecolor="#1e2d46", tickfont=dict(family="Barlow Condensed", size=10)),
+    yaxis=dict(gridcolor="#1a2438", zerolinecolor="#1a2438", showgrid=True,
+               linecolor="#1e2d46", tickfont=dict(family="Barlow Condensed", size=10)),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11, family="Barlow Condensed")),
+    hoverlabel=dict(bgcolor="#101520", font_family="Barlow Condensed, sans-serif",
+                    font_size=12, bordercolor="#243450"),
 )
 
 PALETTE = {
-    "WTI": "#e8a020", "Brent": "#40c8b0", "NatGas": "#f06060",
-    "Gasoline": "#a060e8", "HeatingOil": "#60a8e8",
-    "green": "#40b860", "red": "#e05050", "purple": "#a060e8", "white": "#dde3ee",
+    "WTI":        "#d4963a",
+    "Brent":      "#2eb8a0",
+    "NatGas":     "#e05858",
+    "Gasoline":   "#9060d8",
+    "HeatingOil": "#4a8cc8",
+    "green":      "#38b86a",
+    "red":        "#e05050",
+    "purple":     "#9060d8",
+    "white":      "#c8d8e8",
 }
 
 COLORS = [PALETTE["WTI"], PALETTE["Brent"], PALETTE["NatGas"],
@@ -684,10 +967,15 @@ def backtest_ma_crossover(series: pd.Series, fast: int = 20, slow: int = 50) -> 
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("""
-    <div style='text-align:center;padding:10px 0 16px;'>
-        <div style='font-size:2.2rem'>🛢️</div>
-        <div style='font-family:Syne,sans-serif;font-weight:800;font-size:1rem;color:#e8dfc8;letter-spacing:0.04em;'>OIL & GAS RESEARCH</div>
-        <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#3a5a88;letter-spacing:0.15em;'>MULTI-SOURCE · LIVE DATA</div>
+    <div style='text-align:center;padding:18px 0 20px;'>
+        <div style='font-size:2.4rem;line-height:1;margin-bottom:8px;'>🛢️</div>
+        <div style='font-family:'Bebas Neue',sans-serif;font-size:1.4rem;
+                    color:#c8d8e8;letter-spacing:0.2em;line-height:1;'>OIL & GAS</div>
+        <div style='font-family:'Bebas Neue',sans-serif;font-size:1.4rem;
+                    color:#d4963a;letter-spacing:0.2em;line-height:1;margin-bottom:4px;'>RESEARCH</div>
+        <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
+                    font-weight:600;color:#3a5a78;letter-spacing:0.25em;
+                    text-transform:uppercase;'>MULTI-SOURCE · LIVE DATA</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -713,7 +1001,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("""
-    <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#1a2a40;text-align:center;'>
+    <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;font-weight:500;
+                color:#1e3050;text-align:center;letter-spacing:0.1em;text-transform:uppercase;'>
         ALL SOURCES KEYLESS · NO REGISTRATION<br>
         YAHOO FINANCE · FRED PUBLIC · RSS FEEDS<br>
         CACHE: 5min PRICES · 15min NEWS · 1hr MACRO
@@ -739,12 +1028,12 @@ if bench_res["ok"]:
 
     st.markdown(f"""
     <div class='hero'>
-      <div style='display:flex;align-items:center;gap:14px;'>
-        <div style='font-size:2.6rem;line-height:1;'>🛢️</div>
+      <div style='display:flex;align-items:center;gap:18px;'>
+        <div style='font-size:3rem;line-height:1;'>🛢️</div>
         <div>
-          <div class='hero-title'>Global Oil & Gas — Research Dashboard</div>
+          <div class='hero-title'>Global Oil &amp; Gas Research</div>
           <div class='hero-sub'>Live data · Multi-source · {datetime.today().strftime('%d %b %Y %H:%M')} UTC</div>
-          <div>
+          <div style='margin-top:10px;'>
             <span class='badge badge-live'>● LIVE</span>
             <span class='badge'>{bench_ticker.split('(')[0].strip()} ${last:.2f}</span>
             <span class='badge'>Δ {chg:+.2f} ({pchg:+.1f}%)</span>
@@ -1108,7 +1397,7 @@ with tab_macro:
                     st.metric(col.split("(")[0].strip(),
                               f"{latest:.3f} {unit}",
                               f"{latest - prev:+.3f}")
-                    st.markdown(f"<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;margin-top:4px;'>{desc}</div>",
+                    st.markdown(f"<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;margin-top:4px;'>{desc}</div>",
                                 unsafe_allow_html=True)
                 with r2:
                     sf = go.Figure()
@@ -1509,7 +1798,7 @@ with tab_map:
 
     # ── Legend explainer ─────────────────────────────────────────────────────
     st.markdown("""
-    <div style='display:flex;gap:20px;flex-wrap:wrap;font-family:Space Mono,monospace;font-size:0.6rem;color:#4a6fa5;padding:6px 0 14px;'>
+    <div style='display:flex;gap:20px;flex-wrap:wrap;font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#4a6fa5;padding:6px 0 14px;'>
         <span><span style='color:#40b860'>●</span> Refinery — Operational</span>
         <span><span style='color:#e8a020'>●</span> Refinery — Commissioning</span>
         <span><span style='color:#f06060'>●</span> Refinery — Partial</span>
@@ -1554,15 +1843,15 @@ with tab_map:
         st.markdown(f"""
         <div style='background:#0d1825;border:1px solid #1b2d4f;border-radius:10px;
                     padding:18px 22px;margin:10px 0 18px;'>
-            <div style='font-family:Syne,sans-serif;font-weight:800;font-size:1.3rem;
+            <div style='font-family:'Bebas Neue',sans-serif;font-weight:800;font-size:1.3rem;
                         color:#e8dfc8;'>{dot} {selected_fac}</div>
-            <div style='font-family:Space Mono,monospace;font-size:0.62rem;color:#3a5a88;
+            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;color:#3a5a88;
                         margin:4px 0 10px;'>{fac_row["Country"]} · {fac_row["Region"]} · {fac_type}</div>
             <div style='font-size:0.82rem;color:#8aaccc;'>
                 <b style='color:#c8a060;'>Operator</b>&nbsp; {fac_row["Operator"]} &nbsp;·&nbsp;
                 <b style='color:#c8a060;'>Details</b>&nbsp; {fac_row["Detail"]} &nbsp;·&nbsp;
                 <b style='color:#c8a060;'>Coords</b>&nbsp;
-                <span style='font-family:Space Mono,monospace;font-size:0.72rem;'>
+                <span style='font-family:'Barlow Condensed',sans-serif;font-size:0.72rem;'>
                 {fac_lat:.4f}°, {fac_lon:.4f}°</span>
             </div>
         </div>
@@ -1585,12 +1874,12 @@ with tab_map:
                 st.markdown(f"""
                 <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                             padding:16px 18px;margin-bottom:12px;'>
-                    <div style='font-size:2rem;font-weight:800;color:#e8dfc8;font-family:Syne,sans-serif;'>
+                    <div style='font-size:2rem;font-weight:800;color:#e8dfc8;font-family:'Bebas Neue',sans-serif;'>
                         {wx["temp_c"]:.1f}°C
                         <span style='font-size:0.9rem;color:#6080a8;font-weight:400;'>{wx["condition"]}</span>
                     </div>
                     <div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;
-                                font-family:Space Mono,monospace;font-size:0.65rem;color:#8aaccc;'>
+                                font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;color:#8aaccc;'>
                         <div><span style='color:#c8a060;'>WIND</span><br>
                              {wx["wind_kmh"]:.0f} km/h @ {wx["wind_dir"]:.0f}°</div>
                         <div><span style='color:#c8a060;'>HUMIDITY</span><br>{wx["humidity"]}%</div>
@@ -1599,7 +1888,7 @@ with tab_map:
                              {wx["visibility"]/1000:.1f} km</div>
                     </div>
                 </div>
-                <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;'>
+                <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.55rem;color:#2a4060;'>
                 ▸ {wx["source"]} · {wx["fetched_at"]}</div>
                 """, unsafe_allow_html=True)
 
@@ -1629,7 +1918,7 @@ with tab_map:
             st.markdown("<div class='sh'>🔥 NASA FIRMS — Thermal Anomaly Detection</div>",
                         unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
                 "margin-bottom:8px;'>VIIRS S-NPP 375m · Last 7 days · ~50km radius</div>",
                 unsafe_allow_html=True,
             )
@@ -1640,7 +1929,7 @@ with tab_map:
                 if firms["count"] == 0:
                     st.markdown("""
                     <div style='background:#0d1a0d;border:1px solid #1b3a1b;border-radius:8px;
-                                padding:14px;font-family:Space Mono,monospace;font-size:0.7rem;
+                                padding:14px;font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;
                                 color:#40b860;'>
                         ✓ No thermal anomalies detected in last 7 days within 50 km.<br>
                         Normal flaring / operational baseline.
@@ -1653,9 +1942,9 @@ with tab_map:
                     st.markdown(f"""
                     <div style='background:#1a0d08;border:1px solid #3a2010;border-radius:8px;
                                 padding:14px;margin-bottom:10px;'>
-                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;
+                        <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.95rem;
                                     color:#f06060;'>{firms["count"]} thermal anomalies detected</div>
-                        <div style='font-family:Space Mono,monospace;font-size:0.62rem;color:#a08060;
+                        <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.62rem;color:#a08060;
                                     margin-top:6px;'>
                             Severity: {severity}<br>
                             Avg FRP: {avg_frp:.1f} MW &nbsp;·&nbsp; Peak FRP: {max_frp:.1f} MW<br>
@@ -1727,7 +2016,7 @@ with tab_map:
             # ── Satellite Imagery ────────────────────────────────
             st.markdown("<div class='sh'>🛰 Satellite Imagery</div>", unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
                 "margin-bottom:8px;'>Esri World Imagery (ArcGIS) · Free · No key · "
                 "Sub-metre resolution where available</div>",
                 unsafe_allow_html=True,
@@ -1787,7 +2076,7 @@ with tab_map:
             <div style='display:flex;gap:10px;margin:8px 0 20px;flex-wrap:wrap;'>
                 <a href="{gmaps_url.replace('output=embed&','')}"
                    target="_blank"
-                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -1795,7 +2084,7 @@ with tab_map:
                 </a>
                 <a href="https://livingatlas.arcgis.com/wayback/#active=18150&ext={fac_lon-0.03},{fac_lat-0.02},{fac_lon+0.03},{fac_lat+0.02}"
                    target="_blank"
-                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -1803,7 +2092,7 @@ with tab_map:
                 </a>
                 <a href="https://earthengine.google.com/timelapse#v={fac_lat:.4f},{fac_lon:.4f},12,latLng"
                    target="_blank"
-                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                   style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;
                           color:#e8a020;text-decoration:none;
                           background:#0d1825;border:1px solid #1b2d4f;
                           border-radius:4px;padding:5px 12px;'>
@@ -1815,7 +2104,7 @@ with tab_map:
             st.markdown("<div class='sh'>🚢 AIS Live Vessel Tracking — MarineTraffic</div>",
                         unsafe_allow_html=True)
             st.markdown(
-                "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
+                "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#3a5a88;"
                 "margin-bottom:8px;'>Live AIS positions · Tankers, product carriers & LNG vessels "
                 "near this terminal · Updates every ~2 min</div>",
                 unsafe_allow_html=True,
@@ -1833,7 +2122,7 @@ with tab_map:
                     title="AIS vessel tracking — {selected_fac}">
                 </iframe>
             </div>
-            <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;'>
+            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.55rem;color:#2a4060;'>
                 ▸ MarineTraffic AIS · IMO/MMSI broadcast data ·
                 <a href="https://www.marinetraffic.com/en/ais/home/centerx:{fac_lon:.3f}/centery:{fac_lat:.3f}/zoom:{ais_zoom}"
                 target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
@@ -1863,9 +2152,9 @@ with tab_map:
                         st.markdown(f"""
                         <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                                     padding:14px 16px;margin-bottom:10px;min-height:160px;'>
-                            <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                            <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.88rem;
                                         color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
-                            <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
                                 {row["Country"]} · {row["Region"]}
                             </div>
                             <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
@@ -1890,9 +2179,9 @@ with tab_map:
                         st.markdown(f"""
                         <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
                                     padding:14px 16px;margin-bottom:10px;min-height:150px;'>
-                            <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                            <div style='font-family:'Bebas Neue',sans-serif;font-weight:700;font-size:0.88rem;
                                         color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
-                            <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            <div style='font-family:'Barlow Condensed',sans-serif;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
                                 {row["Country"]} · {row["Type"]}
                             </div>
                             <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
@@ -1937,7 +2226,7 @@ with tab_news:
             short = s.split(":")[0]
             health_parts.append(f"<span style='color:#e05050'>✗ {short}</span>")
         st.markdown(
-            "<div style='font-family:Space Mono,monospace;font-size:0.58rem;margin-bottom:10px;'>"
+            "<div style='font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;margin-bottom:10px;'>"
             + " &nbsp;·&nbsp; ".join(health_parts) + "</div>",
             unsafe_allow_html=True,
         )
@@ -2023,7 +2312,7 @@ with tab_news:
 # ═══════════════════════════════════════════════════════════════
 st.markdown("---")
 st.markdown(f"""
-<div style='text-align:center;font-family:Space Mono,monospace;font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
+<div style='text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:0.58rem;color:#1a2a40;padding:8px 0;'>
     DATA SOURCES: Yahoo Finance — prices, yields, FX, volatility, ETFs · RSS: Reuters · BBC · Al Jazeera · OilPrice · Rigzone<br>
     100% keyless — no API registration, no blocked domains · Prices ~15 min delayed · News cached 15 min<br>
     Last render: {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}
