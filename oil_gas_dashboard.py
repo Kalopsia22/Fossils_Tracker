@@ -463,21 +463,83 @@ def fetch_weather(lat: float, lon: float) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-# ── Sentinel Hub EO Browser iframe URL builder ────────────────
-def sentinel_hub_url(lat: float, lon: float, zoom: int = 13) -> str:
-    """
-    Build a Sentinel Hub EO Browser URL for recent true-colour imagery.
-    Opens as an iframe — no API key needed for the browser view.
-    """
+# ── Satellite imagery URL builders (Sentinel deprecated 20 Mar 2026) ─────────
+
+def google_maps_satellite_url(lat: float, lon: float, zoom: int = 14) -> str:
+    """Google Maps satellite embed — free, no key for basic embed."""
     return (
-        f"https://apps.sentinel-hub.com/eo-browser/"
-        f"?zoom={zoom}&lat={lat:.4f}&lng={lon:.4f}"
-        f"&themeId=DEFAULT-THEME"
-        f"&visualizationUrl=https%3A%2F%2Fservices.sentinel-hub.com%2Fogc%2Fwms%2Fbd86bcc0-f318-402b-a145-015f85b9427e"
-        f"&datasetId=S2L2A&fromTime=2024-01-01T00%3A00%3A00.000Z"
-        f"&toTime={datetime.utcnow().strftime('%Y-%m-%dT%H%%3A%M%%3A%S')}.000Z"
-        f"&layerId=1_TRUE_COLOR"
+        f"https://maps.google.com/maps"
+        f"?q={lat:.5f},{lon:.5f}&z={zoom}&output=embed&t=k"
     )
+
+def usgs_nationalmap_url(lat: float, lon: float, zoom: int = 14) -> str:
+    """USGS National Map viewer — free, no key, global imagery composite."""
+    return (
+        f"https://apps.nationalmap.gov/viewer/"
+        f"?basemap=USGSImageryOnly"
+        f"#x={lon:.5f}&y={lat:.5f}&z={zoom}"
+    )
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_osm_static_tile(lat: float, lon: float, zoom: int = 14) -> dict:
+    """
+    Fetch a static satellite tile via Esri World Imagery (free, no key).
+    Returns a 512×512 PNG as bytes for inline display.
+    Esri's World Imagery WMS is openly accessible.
+    """
+    try:
+        # Convert lat/lon to tile XY
+        import math
+        n = 2 ** zoom
+        x = int((lon + 180) / 360 * n)
+        y = int((1 - math.log(math.tan(math.radians(lat)) +
+                 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n)
+
+        # Esri World Imagery tile service — completely free, no key
+        url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y}/{x}"
+        r = requests.get(url, timeout=10,
+                         headers={"User-Agent": "OilGasResearchDashboard/1.0"})
+        r.raise_for_status()
+        return {
+            "ok": True,
+            "bytes": r.content,
+            "tile": f"z={zoom} x={x} y={y}",
+            "source": "Esri World Imagery (ArcGIS Online — free, no key)",
+            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_satellite_mosaic(lat: float, lon: float, zoom: int = 14) -> dict:
+    """
+    Fetch a 3×3 mosaic of Esri World Imagery tiles centred on facility.
+    Returns list of (row, col, bytes) for display as a grid.
+    """
+    import math
+    try:
+        n = 2 ** zoom
+        cx = int((lon + 180) / 360 * n)
+        cy = int((1 - math.log(math.tan(math.radians(lat)) +
+                  1 / math.cos(math.radians(lat))) / math.pi) / 2 * n)
+        tiles = []
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                tx, ty = cx + dx, cy + dy
+                url = (f"https://server.arcgisonline.com/ArcGIS/rest/services"
+                       f"/World_Imagery/MapServer/tile/{zoom}/{ty}/{tx}")
+                r = requests.get(url, timeout=8,
+                                 headers={"User-Agent": "OilGasResearchDashboard/1.0"})
+                if r.status_code == 200:
+                    tiles.append((dy + 1, dx + 1, r.content))
+        return {
+            "ok": bool(tiles),
+            "tiles": tiles,
+            "source": "Esri World Imagery (ArcGIS Online — free, no key)",
+            "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tiles": []}
 
 
 # ── MarineTraffic AIS embed URL builder ───────────────────────
@@ -1463,7 +1525,7 @@ with tab_map:
     st.markdown("""
     <div class='info-box'>
     Select a facility below to open a live intelligence panel — NASA FIRMS flaring detection,
-    real-time weather, Sentinel-2 satellite imagery, and AIS vessel tracking.
+    real-time weather, Esri World Imagery satellite tiles, and AIS vessel tracking.
     </div>""", unsafe_allow_html=True)
 
     # Build combined facility list for selector
@@ -1659,36 +1721,94 @@ with tab_map:
                 domain may be restricted on this deployment. Try again shortly.</div>""",
                 unsafe_allow_html=True)
 
-        # ── RIGHT: Sentinel Hub + AIS ────────────────────────────
+        # ── RIGHT: Satellite Imagery + AIS ───────────────────────
         with right_col:
 
-            # ── Sentinel Hub Satellite Imagery ───────────────────
-            st.markdown("<div class='sh'>🛰 Sentinel-2 Satellite Imagery</div>",
-                        unsafe_allow_html=True)
+            # ── Satellite Imagery ────────────────────────────────
+            st.markdown("<div class='sh'>🛰 Satellite Imagery</div>", unsafe_allow_html=True)
             st.markdown(
                 "<div style='font-family:Space Mono,monospace;font-size:0.58rem;color:#3a5a88;"
-                "margin-bottom:8px;'>ESA Copernicus · 10m resolution · ~5 day revisit · "
-                "True colour composite — opens interactive viewer</div>",
+                "margin-bottom:8px;'>Esri World Imagery (ArcGIS) · Free · No key · "
+                "Sub-metre resolution where available</div>",
                 unsafe_allow_html=True,
             )
-            sat_zoom = st.slider("Satellite zoom", 10, 16, 13, key="sat_zoom")
-            sentinel_url = sentinel_hub_url(fac_lat, fac_lon, zoom=sat_zoom)
 
+            sat_zoom = st.slider("Zoom level", 10, 17, 14, key="sat_zoom")
+
+            # Fetch 3×3 tile mosaic from Esri World Imagery
+            with st.spinner("Loading satellite tiles…"):
+                mosaic = fetch_satellite_mosaic(fac_lat, fac_lon, zoom=sat_zoom)
+
+            if mosaic["ok"] and mosaic["tiles"]:
+                import io
+                try:
+                    from PIL import Image
+                    # Stitch 3×3 grid into single image
+                    tile_size = 256
+                    grid = Image.new("RGB", (tile_size * 3, tile_size * 3))
+                    for row, col, tile_bytes in mosaic["tiles"]:
+                        tile_img = Image.open(io.BytesIO(tile_bytes)).convert("RGB")
+                        grid.paste(tile_img, (col * tile_size, row * tile_size))
+                    # Annotate centre crosshair
+                    from PIL import ImageDraw
+                    draw = ImageDraw.Draw(grid)
+                    cx, cy = tile_size * 3 // 2, tile_size * 3 // 2
+                    draw.ellipse([cx-8, cy-8, cx+8, cy+8], outline="#e8a020", width=2)
+                    draw.line([cx-14, cy, cx+14, cy], fill="#e8a020", width=1)
+                    draw.line([cx, cy-14, cx, cy+14], fill="#e8a020", width=1)
+                    buf = io.BytesIO()
+                    grid.save(buf, format="PNG")
+                    st.image(buf.getvalue(), use_container_width=True,
+                             caption=f"{selected_fac} · {fac_lat:.4f}°, {fac_lon:.4f}° · zoom {sat_zoom}")
+                    st.markdown(
+                        f"<div class='prov'>▸ {mosaic['source']} · {mosaic['fetched_at']} "
+                        f"· 3×3 tile mosaic</div>",
+                        unsafe_allow_html=True,
+                    )
+                except ImportError:
+                    # Pillow not available — show centre tile only
+                    centre_tile = next(
+                        (b for r,c,b in mosaic["tiles"] if r==1 and c==1), None
+                    )
+                    if centre_tile:
+                        st.image(centre_tile, use_container_width=True,
+                                 caption=f"{selected_fac} · zoom {sat_zoom}")
+                    st.markdown(
+                        f"<div class='prov'>▸ {mosaic['source']} · centre tile only "
+                        f"(install Pillow for full mosaic)</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                err_box(f"Satellite tiles: {mosaic.get('error','fetch failed')}")
+
+            # External viewers
+            gmaps_url = google_maps_satellite_url(fac_lat, fac_lon, zoom=sat_zoom)
             st.markdown(f"""
-            <div style='border:1px solid #1b2d4f;border-radius:8px;overflow:hidden;
-                        margin-bottom:6px;'>
-                <iframe src="{sentinel_url}"
-                    width="100%" height="420"
-                    style="border:none;display:block;"
-                    loading="lazy"
-                    title="Sentinel-2 imagery — {selected_fac}">
-                </iframe>
-            </div>
-            <div style='font-family:Space Mono,monospace;font-size:0.55rem;color:#2a4060;
-                        margin-bottom:16px;'>
-                ▸ Sentinel Hub EO Browser · ESA Copernicus Programme · No key required
-                · <a href="{sentinel_url}" target="_blank"
-                style='color:#e8a020;'>Open full screen ↗</a>
+            <div style='display:flex;gap:10px;margin:8px 0 20px;flex-wrap:wrap;'>
+                <a href="{gmaps_url.replace('output=embed&','')}"
+                   target="_blank"
+                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                          color:#e8a020;text-decoration:none;
+                          background:#0d1825;border:1px solid #1b2d4f;
+                          border-radius:4px;padding:5px 12px;'>
+                   🗺 Open in Google Maps ↗
+                </a>
+                <a href="https://livingatlas.arcgis.com/wayback/#active=18150&ext={fac_lon-0.03},{fac_lat-0.02},{fac_lon+0.03},{fac_lat+0.02}"
+                   target="_blank"
+                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                          color:#e8a020;text-decoration:none;
+                          background:#0d1825;border:1px solid #1b2d4f;
+                          border-radius:4px;padding:5px 12px;'>
+                   📅 Esri Wayback (historical imagery) ↗
+                </a>
+                <a href="https://earthengine.google.com/timelapse#v={fac_lat:.4f},{fac_lon:.4f},12,latLng"
+                   target="_blank"
+                   style='font-family:Space Mono,monospace;font-size:0.6rem;
+                          color:#e8a020;text-decoration:none;
+                          background:#0d1825;border:1px solid #1b2d4f;
+                          border-radius:4px;padding:5px 12px;'>
+                   ⏱ Google Earth Timelapse ↗
+                </a>
             </div>""", unsafe_allow_html=True)
 
             # ── AIS Vessel Tracking ──────────────────────────────
@@ -1707,7 +1827,7 @@ with tab_map:
             <div style='border:1px solid #1b2d4f;border-radius:8px;overflow:hidden;
                         margin-bottom:6px;'>
                 <iframe src="{ais_url}"
-                    width="100%" height="420"
+                    width="100%" height="400"
                     style="border:none;display:block;"
                     loading="lazy"
                     title="AIS vessel tracking — {selected_fac}">
