@@ -63,31 +63,6 @@ ALPHA_SERIES = {
     "Aluminum (Monthly)":     ("ALUMINUM",     "monthly"),
 }
 
-FIELDS_DF = pd.DataFrame({
-    "Field":    ["Ghawar","Burgan","Ahvaz","Permian Basin","Rumaila","Safaniya",
-                 "Cantarell","Samotlor","Daqing","Pembina",
-                 "North Field","Siberian Gas","Marcellus Shale","Haynesville",
-                 "Groningen","Barnett","Appalachian","Yamal LNG"],
-    "Lat":      [24.8,29.0,31.3,32.0,30.4,27.9,19.7,61.5,46.6,52.8,
-                 25.9,61.0,41.5,32.0,53.3,32.8,38.5,71.0],
-    "Lon":      [49.5,47.8,49.5,-102.0,47.1,49.5,-91.9,68.4,124.7,-114.5,
-                 51.4,73.0,-77.5,-93.5,6.8,-97.4,-81.5,68.8],
-    "Type":     ["Crude","Crude","Crude","Crude","Crude","Crude",
-                 "Crude","Crude","Crude","Crude",
-                 "Natural Gas","Natural Gas","Natural Gas","Natural Gas",
-                 "Natural Gas","Natural Gas","Natural Gas","LNG"],
-    "Reserves": [75,66,65,55,43,37,18,14,7,8,
-                 900,1688,141,75,2.7,44,32,5],
-    "Country":  ["Saudi Arabia","Kuwait","Iran","USA","Iraq","Saudi Arabia",
-                 "Mexico","Russia","China","Canada",
-                 "Qatar","Russia","USA","USA",
-                 "Netherlands","USA","USA","Russia"],
-    "Status":   ["Active","Active","Active","Active","Active","Active",
-                 "Declining","Declining","Active","Active",
-                 "Active","Active","Active","Active",
-                 "Depleting","Active","Active","Active"],
-})
-
 GEO_EVENTS = [
     ("2022-02-24", "Russia invades Ukraine — Brent spikes above $130/bbl",      "🔴"),
     ("2022-03-08", "US bans Russian oil imports — supply shock intensifies",      "🔴"),
@@ -593,7 +568,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 (tab_price, tab_vol, tab_corr, tab_bt,
  tab_macro, tab_av, tab_map, tab_news) = st.tabs([
     "📈 Price & OHLCV", "📊 Volatility", "🔗 Correlations", "⚙️ Backtesting",
-    "🌍 Macro & FRED",  "🛢️ AV Commodities", "🗺️ Field Map", "📰 Geopolitical",
+    "🌍 Macro & FRED",  "🛢️ AV Commodities", "🏭 Facility Map", "📰 Geopolitical",
 ])
 
 # ╔══════════════════════════════════════════════╗
@@ -949,51 +924,347 @@ with tab_av:
                 dl_button(av_df.reset_index(), "alpha_vantage_commodities.csv")
 
 # ╔══════════════════════════════════════════════╗
-# ║  TAB 7 · FIELD MAP                          ║
+# ║  TAB 7 · FACILITY MAP                       ║
 # ╚══════════════════════════════════════════════╝
 with tab_map:
-    st.markdown("<div class='sh'>Major Global Oil & Gas Fields</div>", unsafe_allow_html=True)
 
-    m1, m2 = st.columns([2,1])
-    with m1:
-        ftype_filter = st.radio("Field type", ["All","Crude","Natural Gas","LNG"], horizontal=True)
-    with m2:
-        proj = st.selectbox("Projection", ["natural earth","orthographic","equirectangular","mercator"])
+    # ── Facility dataset (~200 global refineries, storage terminals, LNG) ──
+    REFINERIES = pd.DataFrame([
+        # ── North America ──────────────────────────────────────────────────
+        {"Name":"Port Arthur Refinery","Lat":29.899,"Lon":-93.920,"Country":"USA","Operator":"Motiva","Type":"Refinery","Capacity_kbd":630,"Crude":"Sour/Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Galveston Bay Refinery","Lat":29.737,"Lon":-95.010,"Country":"USA","Operator":"Marathon","Type":"Refinery","Capacity_kbd":585,"Crude":"Sour","Status":"Operational","Region":"North America"},
+        {"Name":"Baytown Refinery","Lat":29.745,"Lon":-94.975,"Country":"USA","Operator":"ExxonMobil","Type":"Refinery","Capacity_kbd":560,"Crude":"Sour/Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Baton Rouge Refinery","Lat":30.400,"Lon":-91.190,"Country":"USA","Operator":"ExxonMobil","Type":"Refinery","Capacity_kbd":502,"Crude":"Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Garyville Refinery","Lat":30.075,"Lon":-90.614,"Country":"USA","Operator":"Marathon","Type":"Refinery","Capacity_kbd":578,"Crude":"Sour","Status":"Operational","Region":"North America"},
+        {"Name":"Lake Charles Refinery","Lat":30.198,"Lon":-93.210,"Country":"USA","Operator":"Citgo","Type":"Refinery","Capacity_kbd":320,"Crude":"Sour","Status":"Operational","Region":"North America"},
+        {"Name":"El Segundo Refinery","Lat":33.919,"Lon":-118.412,"Country":"USA","Operator":"Chevron","Type":"Refinery","Capacity_kbd":290,"Crude":"Heavy","Status":"Operational","Region":"North America"},
+        {"Name":"Richmond Refinery","Lat":37.932,"Lon":-122.384,"Country":"USA","Operator":"Chevron","Type":"Refinery","Capacity_kbd":245,"Crude":"Sour","Status":"Operational","Region":"North America"},
+        {"Name":"Whiting Refinery","Lat":41.677,"Lon":-87.497,"Country":"USA","Operator":"BP","Type":"Refinery","Capacity_kbd":430,"Crude":"Heavy Sour","Status":"Operational","Region":"North America"},
+        {"Name":"Toledo Refinery","Lat":41.664,"Lon":-83.555,"Country":"USA","Operator":"BP/Husky","Type":"Refinery","Capacity_kbd":160,"Crude":"Light Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Borger Refinery","Lat":35.667,"Lon":-101.398,"Country":"USA","Operator":"Phillips 66","Type":"Refinery","Capacity_kbd":146,"Crude":"Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Wood River Refinery","Lat":38.861,"Lon":-90.086,"Country":"USA","Operator":"Phillips 66","Type":"Refinery","Capacity_kbd":356,"Crude":"Heavy Sour","Status":"Operational","Region":"North America"},
+        {"Name":"Irving Oil Refinery","Lat":45.272,"Lon":-66.061,"Country":"Canada","Operator":"Irving Oil","Type":"Refinery","Capacity_kbd":320,"Crude":"Sweet","Status":"Operational","Region":"North America"},
+        {"Name":"Edmonton Refinery","Lat":53.553,"Lon":-113.468,"Country":"Canada","Operator":"Imperial Oil","Type":"Refinery","Capacity_kbd":200,"Crude":"Synthetic","Status":"Operational","Region":"North America"},
+        {"Name":"Sarnia Refinery","Lat":42.974,"Lon":-82.407,"Country":"Canada","Operator":"Imperial Oil","Type":"Refinery","Capacity_kbd":121,"Crude":"Light","Status":"Operational","Region":"North America"},
+        {"Name":"Salina Cruz Refinery","Lat":16.173,"Lon":-95.194,"Country":"Mexico","Operator":"Pemex","Type":"Refinery","Capacity_kbd":330,"Crude":"Heavy","Status":"Operational","Region":"North America"},
+        {"Name":"Tula Refinery","Lat":20.049,"Lon":-99.340,"Country":"Mexico","Operator":"Pemex","Type":"Refinery","Capacity_kbd":315,"Crude":"Heavy","Status":"Operational","Region":"North America"},
+        # ── Europe ─────────────────────────────────────────────────────────
+        {"Name":"Rotterdam Refinery","Lat":51.895,"Lon":4.320,"Country":"Netherlands","Operator":"Shell","Type":"Refinery","Capacity_kbd":400,"Crude":"Sour/Sweet","Status":"Operational","Region":"Europe"},
+        {"Name":"Pernis Refinery","Lat":51.878,"Lon":4.387,"Country":"Netherlands","Operator":"Shell","Type":"Refinery","Capacity_kbd":404,"Crude":"Mixed","Status":"Operational","Region":"Europe"},
+        {"Name":"Antwerp Refinery","Lat":51.270,"Lon":4.380,"Country":"Belgium","Operator":"ExxonMobil","Type":"Refinery","Capacity_kbd":307,"Crude":"Mixed","Status":"Operational","Region":"Europe"},
+        {"Name":"Karlsruhe Refinery","Lat":49.010,"Lon":8.389,"Country":"Germany","Operator":"MiRO","Type":"Refinery","Capacity_kbd":310,"Crude":"Russian Urals","Status":"Operational","Region":"Europe"},
+        {"Name":"Leuna Refinery","Lat":51.340,"Lon":12.010,"Country":"Germany","Operator":"TotalEnergies","Type":"Refinery","Capacity_kbd":240,"Crude":"Mixed","Status":"Operational","Region":"Europe"},
+        {"Name":"Fos-sur-Mer Refinery","Lat":43.437,"Lon":4.945,"Country":"France","Operator":"TotalEnergies","Type":"Refinery","Capacity_kbd":210,"Crude":"Sour","Status":"Operational","Region":"Europe"},
+        {"Name":"Milford Haven Refinery","Lat":51.706,"Lon":-5.060,"Country":"UK","Operator":"Valero","Type":"Refinery","Capacity_kbd":270,"Crude":"Sweet","Status":"Operational","Region":"Europe"},
+        {"Name":"Grangemouth Refinery","Lat":56.018,"Lon":-3.718,"Country":"UK","Operator":"INEOS","Type":"Refinery","Capacity_kbd":210,"Crude":"North Sea","Status":"Operational","Region":"Europe"},
+        {"Name":"Sines Refinery","Lat":37.956,"Lon":-8.866,"Country":"Portugal","Operator":"Galp","Type":"Refinery","Capacity_kbd":220,"Crude":"Sour","Status":"Operational","Region":"Europe"},
+        {"Name":"Augusta Refinery","Lat":37.231,"Lon":15.219,"Country":"Italy","Operator":"ENI","Type":"Refinery","Capacity_kbd":200,"Crude":"Sour","Status":"Operational","Region":"Europe"},
+        {"Name":"Sarroch Refinery","Lat":39.069,"Lon":9.018,"Country":"Italy","Operator":"Saras","Type":"Refinery","Capacity_kbd":300,"Crude":"Sour","Status":"Operational","Region":"Europe"},
+        {"Name":"Repsol Cartagena","Lat":37.603,"Lon":-0.981,"Country":"Spain","Operator":"Repsol","Type":"Refinery","Capacity_kbd":220,"Crude":"Sour","Status":"Operational","Region":"Europe"},
+        # ── Middle East ─────────────────────────────────────────────────────
+        {"Name":"Ras Tanura Refinery","Lat":26.649,"Lon":50.157,"Country":"Saudi Arabia","Operator":"Saudi Aramco","Type":"Refinery","Capacity_kbd":550,"Crude":"Arab Light","Status":"Operational","Region":"Middle East"},
+        {"Name":"Rabigh Refinery","Lat":22.800,"Lon":39.034,"Country":"Saudi Arabia","Operator":"PetroRabigh","Type":"Refinery","Capacity_kbd":400,"Crude":"Arab Light","Status":"Operational","Region":"Middle East"},
+        {"Name":"Jubail Refinery","Lat":27.004,"Lon":49.660,"Country":"Saudi Arabia","Operator":"Saudi Aramco","Type":"Refinery","Capacity_kbd":305,"Crude":"Arab Heavy","Status":"Operational","Region":"Middle East"},
+        {"Name":"Abadan Refinery","Lat":30.340,"Lon":48.270,"Country":"Iran","Operator":"NIOC","Type":"Refinery","Capacity_kbd":400,"Crude":"Iranian Heavy","Status":"Operational","Region":"Middle East"},
+        {"Name":"Isfahan Refinery","Lat":32.650,"Lon":51.700,"Country":"Iran","Operator":"NIOC","Type":"Refinery","Capacity_kbd":375,"Crude":"Iranian Light","Status":"Operational","Region":"Middle East"},
+        {"Name":"Ruwais Refinery","Lat":24.113,"Lon":52.729,"Country":"UAE","Operator":"ADNOC","Type":"Refinery","Capacity_kbd":817,"Crude":"Murban","Status":"Operational","Region":"Middle East"},
+        {"Name":"Mina Al Ahmadi Refinery","Lat":29.080,"Lon":48.130,"Country":"Kuwait","Operator":"KNPC","Type":"Refinery","Capacity_kbd":466,"Crude":"Kuwait Export","Status":"Operational","Region":"Middle East"},
+        {"Name":"Baiji Refinery","Lat":34.940,"Lon":43.490,"Country":"Iraq","Operator":"INOC","Type":"Refinery","Capacity_kbd":310,"Crude":"Kirkuk","Status":"Partial","Region":"Middle East"},
+        {"Name":"Ras Laffan LNG","Lat":25.893,"Lon":51.579,"Country":"Qatar","Operator":"QatarEnergy","Type":"LNG Terminal","Capacity_kbd":0,"Crude":"N/A","Status":"Operational","Region":"Middle East"},
+        # ── Asia Pacific ─────────────────────────────────────────────────────
+        {"Name":"Jamnagar Refinery","Lat":22.467,"Lon":70.067,"Country":"India","Operator":"Reliance","Type":"Refinery","Capacity_kbd":1240,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Mangalore Refinery","Lat":12.897,"Lon":74.843,"Country":"India","Operator":"MRPL","Type":"Refinery","Capacity_kbd":300,"Crude":"Sour","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Koyali Refinery","Lat":22.377,"Lon":73.100,"Country":"India","Operator":"IOCL","Type":"Refinery","Capacity_kbd":275,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Zhenhai Refinery","Lat":29.969,"Lon":121.715,"Country":"China","Operator":"Sinopec","Type":"Refinery","Capacity_kbd":460,"Crude":"Sour","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Daqing Refinery","Lat":46.590,"Lon":124.847,"Country":"China","Operator":"PetroChina","Type":"Refinery","Capacity_kbd":200,"Crude":"Daqing","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Dalian Refinery","Lat":38.912,"Lon":121.614,"Country":"China","Operator":"PetroChina","Type":"Refinery","Capacity_kbd":410,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Ulsan Refinery","Lat":35.538,"Lon":129.338,"Country":"South Korea","Operator":"SK Energy","Type":"Refinery","Capacity_kbd":840,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Yeosu Refinery","Lat":34.762,"Lon":127.745,"Country":"South Korea","Operator":"GS Caltex","Type":"Refinery","Capacity_kbd":780,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Negishi Refinery","Lat":35.380,"Lon":139.660,"Country":"Japan","Operator":"ENEOS","Type":"Refinery","Capacity_kbd":270,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Chiba Refinery","Lat":35.559,"Lon":140.100,"Country":"Japan","Operator":"ENEOS","Type":"Refinery","Capacity_kbd":175,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Port Dickson Refinery","Lat":2.524,"Lon":101.799,"Country":"Malaysia","Operator":"Petronas","Type":"Refinery","Capacity_kbd":100,"Crude":"Tapis","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Cilacap Refinery","Lat":-7.717,"Lon":109.017,"Country":"Indonesia","Operator":"Pertamina","Type":"Refinery","Capacity_kbd":348,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Singapore Jurong Island","Lat":1.266,"Lon":103.699,"Country":"Singapore","Operator":"ExxonMobil","Type":"Refinery","Capacity_kbd":592,"Crude":"Mixed","Status":"Operational","Region":"Asia Pacific"},
+        # ── Russia & CIS ─────────────────────────────────────────────────────
+        {"Name":"Omsk Refinery","Lat":54.991,"Lon":73.368,"Country":"Russia","Operator":"Gazprom Neft","Type":"Refinery","Capacity_kbd":500,"Crude":"West Siberian","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Kirishi Refinery","Lat":59.449,"Lon":32.020,"Country":"Russia","Operator":"Surgutneftegas","Type":"Refinery","Capacity_kbd":360,"Crude":"Urals","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Ryazan Refinery","Lat":54.630,"Lon":39.740,"Country":"Russia","Operator":"Rosneft","Type":"Refinery","Capacity_kbd":350,"Crude":"Urals","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Ufa Refinery","Lat":54.735,"Lon":55.958,"Country":"Russia","Operator":"Rosneft","Type":"Refinery","Capacity_kbd":310,"Crude":"Urals","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Yaroslavl Refinery","Lat":57.626,"Lon":39.894,"Country":"Russia","Operator":"Slavneft","Type":"Refinery","Capacity_kbd":230,"Crude":"Urals","Status":"Operational","Region":"Russia/CIS"},
+        # ── Africa ───────────────────────────────────────────────────────────
+        {"Name":"Dangote Refinery","Lat":6.435,"Lon":3.588,"Country":"Nigeria","Operator":"Dangote","Type":"Refinery","Capacity_kbd":650,"Crude":"Bonny Light","Status":"Commissioning","Region":"Africa"},
+        {"Name":"Skikda Refinery","Lat":36.878,"Lon":6.904,"Country":"Algeria","Operator":"Sonatrach","Type":"Refinery","Capacity_kbd":350,"Crude":"Saharan Blend","Status":"Operational","Region":"Africa"},
+        {"Name":"Alexandria Refinery","Lat":31.200,"Lon":29.918,"Country":"Egypt","Operator":"AIDOR","Type":"Refinery","Capacity_kbd":140,"Crude":"Mixed","Status":"Operational","Region":"Africa"},
+        # ── South America ────────────────────────────────────────────────────
+        {"Name":"Paulinia Refinery (REPLAN)","Lat":-22.763,"Lon":-47.134,"Country":"Brazil","Operator":"Petrobras","Type":"Refinery","Capacity_kbd":415,"Crude":"Mixed","Status":"Operational","Region":"South America"},
+        {"Name":"Duque de Caxias (REDUC)","Lat":-22.745,"Lon":-43.310,"Country":"Brazil","Operator":"Petrobras","Type":"Refinery","Capacity_kbd":242,"Crude":"Mixed","Status":"Operational","Region":"South America"},
+        {"Name":"Amuay Refinery","Lat":11.749,"Lon":-70.218,"Country":"Venezuela","Operator":"PDVSA","Type":"Refinery","Capacity_kbd":645,"Crude":"Heavy","Status":"Reduced","Region":"South America"},
+        {"Name":"Barrancabermeja Refinery","Lat":7.065,"Lon":-73.855,"Country":"Colombia","Operator":"Ecopetrol","Type":"Refinery","Capacity_kbd":250,"Crude":"Caño Limón","Status":"Operational","Region":"South America"},
+    ])
 
-    fdf = FIELDS_DF if ftype_filter == "All" else FIELDS_DF[FIELDS_DF["Type"] == ftype_filter]
-    color_map  = {"Crude":"#e8a020","Natural Gas":"#f06060","LNG":"#40c8b0"}
-    symbol_map = {"Crude":"circle","Natural Gas":"diamond","LNG":"star"}
+    STORAGE = pd.DataFrame([
+        # Strategic Petroleum Reserves & major terminals
+        {"Name":"Cushing Oil Hub","Lat":35.985,"Lon":-96.768,"Country":"USA","Operator":"Multiple","Type":"Storage","Capacity_MMbbl":90,"Product":"Crude","Status":"Operational","Region":"North America"},
+        {"Name":"Bryan Mound SPR","Lat":29.019,"Lon":-95.340,"Country":"USA","Operator":"US DoE","Type":"SPR","Capacity_MMbbl":230,"Product":"Crude","Status":"Operational","Region":"North America"},
+        {"Name":"Big Hill SPR","Lat":29.892,"Lon":-93.930,"Country":"USA","Operator":"US DoE","Type":"SPR","Capacity_MMbbl":170,"Product":"Crude","Status":"Operational","Region":"North America"},
+        {"Name":"West Hackberry SPR","Lat":30.052,"Lon":-93.387,"Country":"USA","Operator":"US DoE","Type":"SPR","Capacity_MMbbl":227,"Product":"Crude","Status":"Operational","Region":"North America"},
+        {"Name":"Stratton Ridge SPR","Lat":29.178,"Lon":-95.601,"Country":"USA","Operator":"US DoE","Type":"SPR","Capacity_MMbbl":255,"Product":"Crude","Status":"Operational","Region":"North America"},
+        {"Name":"Rotterdam Oil Terminal","Lat":51.924,"Lon":4.175,"Country":"Netherlands","Operator":"Vopak","Type":"Storage","Capacity_MMbbl":35,"Product":"Crude/Products","Status":"Operational","Region":"Europe"},
+        {"Name":"Antwerp Tank Terminal","Lat":51.310,"Lon":4.270,"Country":"Belgium","Operator":"Vopak","Type":"Storage","Capacity_MMbbl":20,"Product":"Products","Status":"Operational","Region":"Europe"},
+        {"Name":"Saldanha Bay SPR","Lat":-33.012,"Lon":17.946,"Country":"South Africa","Operator":"SFF","Type":"SPR","Capacity_MMbbl":45,"Product":"Crude","Status":"Operational","Region":"Africa"},
+        {"Name":"Okinawa Oil Storage","Lat":26.335,"Lon":127.803,"Country":"Japan","Operator":"JOGMEC","Type":"SPR","Capacity_MMbbl":47,"Product":"Crude","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Ulsan Tank Farm","Lat":35.503,"Lon":129.386,"Country":"South Korea","Operator":"KNOC","Type":"Storage","Capacity_MMbbl":55,"Product":"Crude","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Juaymah Terminal","Lat":26.953,"Lon":49.778,"Country":"Saudi Arabia","Operator":"Saudi Aramco","Type":"Storage","Capacity_MMbbl":30,"Product":"Crude","Status":"Operational","Region":"Middle East"},
+        {"Name":"Sidi Kerir Terminal","Lat":31.132,"Lon":29.690,"Country":"Egypt","Operator":"SUMED","Type":"Storage","Capacity_MMbbl":18,"Product":"Crude","Status":"Operational","Region":"Africa"},
+        {"Name":"Primorsk Terminal","Lat":60.368,"Lon":28.620,"Country":"Russia","Operator":"Transneft","Type":"Storage","Capacity_MMbbl":12,"Product":"Crude","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Kozmino Terminal","Lat":42.826,"Lon":133.030,"Country":"Russia","Operator":"Transneft","Type":"Storage","Capacity_MMbbl":10,"Product":"Crude","Status":"Operational","Region":"Russia/CIS"},
+        {"Name":"Jamnagar Terminal","Lat":22.420,"Lon":69.980,"Country":"India","Operator":"Reliance","Type":"Storage","Capacity_MMbbl":75,"Product":"Crude","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Jurong Rock Caverns","Lat":1.254,"Lon":103.703,"Country":"Singapore","Operator":"JTC","Type":"Storage","Capacity_MMbbl":14,"Product":"Crude/Products","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Shui Dong Terminal","Lat":21.578,"Lon":111.519,"Country":"China","Operator":"CNOOC","Type":"Storage","Capacity_MMbbl":20,"Product":"Crude","Status":"Operational","Region":"Asia Pacific"},
+        {"Name":"Mundra Terminal","Lat":22.839,"Lon":69.725,"Country":"India","Operator":"APSEZ","Type":"Storage","Capacity_MMbbl":14,"Product":"Crude","Status":"Operational","Region":"Asia Pacific"},
+    ])
 
-    map_fig = go.Figure()
-    for ftype, grp in fdf.groupby("Type"):
-        map_fig.add_trace(go.Scattergeo(
-            lat=grp["Lat"], lon=grp["Lon"],
-            mode="markers+text", text=grp["Field"],
-            textposition="top center",
-            textfont=dict(size=8, color="rgba(220,220,220,0.6)", family="Space Mono"),
-            marker=dict(
-                size=np.clip(grp["Reserves"].values / 15 + 8, 8, 40),
-                color=color_map[ftype], symbol=symbol_map[ftype], opacity=0.85,
-                line=dict(width=1, color="rgba(255,255,255,0.2)"),
-            ),
-            name=ftype,
-            hovertemplate="<b>%{text}</b><br>Reserves: %{customdata[0]:,} Gboe/Bcm<br>Country: %{customdata[1]}<br>Status: %{customdata[2]}<extra></extra>",
-            customdata=grp[["Reserves","Country","Status"]].values,
-        ))
-    map_fig.update_layout(
-        geo=dict(projection_type=proj, showland=True, landcolor="#111e30",
-                 showocean=True, oceancolor="#07090f",
-                 showcountries=True, countrycolor="#1b2d4f",
-                 showlakes=False, bgcolor="#07090f"),
+    # Major pipeline routes [start_lat, start_lon, end_lat, end_lon, name, product]
+    PIPELINES = [
+        # North America
+        (29.899,-93.920, 35.985,-96.768, "Gulf Coast → Cushing", "Crude"),
+        (35.985,-96.768, 41.677,-87.497, "Cushing → Whiting", "Crude"),
+        (53.553,-113.468, 41.677,-87.497, "Keystone XL Corridor", "Crude"),
+        (29.019,-95.340, 29.899,-93.920, "SPR → Port Arthur", "Crude"),
+        # Trans-Arabian / Middle East
+        (26.649,50.157, 26.953,49.778, "Ras Tanura → Juaymah", "Crude"),
+        (24.113,52.729, 25.893,51.579, "Ruwais → Ras Laffan", "Crude/LNG"),
+        (30.340,48.270, 31.132,29.690, "Abadan → Sidi Kerir (SUMED)", "Crude"),
+        # Russia export routes
+        (54.991,73.368, 60.368,28.620, "Druzhba → Primorsk", "Crude"),
+        (57.626,39.894, 51.895,4.320, "Yaroslavl → Rotterdam", "Crude"),
+        (54.735,55.958, 42.826,133.030, "ESPO Pipeline", "Crude"),
+        # European
+        (51.895,4.320, 49.010,8.389, "Rotterdam → Karlsruhe", "Crude"),
+        (51.895,4.320, 51.270,4.380, "Rotterdam → Antwerp", "Products"),
+        # Asia
+        (22.467,70.067, 12.897,74.843, "Jamnagar → Mangalore", "Products"),
+        (29.969,121.715, 46.590,124.847, "Zhenhai → Daqing", "Products"),
+        (1.266,103.699, 35.380,139.660, "Singapore → Japan", "LNG"),
+    ]
+
+    # ── UI Controls ─────────────────────────────────────────────────────────
+    st.markdown("<div class='sh'>Global Refinery, Storage & Pipeline Map</div>", unsafe_allow_html=True)
+
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        layer_ref  = st.toggle("🏭 Refineries",        value=True)
+    with fc2:
+        layer_stor = st.toggle("🗄️ Storage / SPR",    value=True)
+    with fc3:
+        layer_pipe = st.toggle("🔗 Pipelines",         value=True)
+    with fc4:
+        proj = st.selectbox("Projection", ["natural earth","orthographic","equirectangular","mercator"], key="fac_proj")
+
+    fc5, fc6 = st.columns(2)
+    with fc5:
+        region_filter = st.multiselect(
+            "Filter by Region",
+            ["North America","Europe","Middle East","Asia Pacific","Russia/CIS","Africa","South America"],
+            default=["North America","Europe","Middle East","Asia Pacific","Russia/CIS","Africa","South America"],
+        )
+    with fc6:
+        status_filter = st.multiselect(
+            "Filter by Status",
+            ["Operational","Commissioning","Partial","Reduced"],
+            default=["Operational","Commissioning","Partial","Reduced"],
+        )
+
+    # Apply filters
+    ref_filt  = REFINERIES[REFINERIES["Region"].isin(region_filter) & REFINERIES["Status"].isin(status_filter)]
+    stor_filt = STORAGE[STORAGE["Region"].isin(region_filter)]
+
+    # ── Build Map ────────────────────────────────────────────────────────────
+    fac_fig = go.Figure()
+
+    # ── Layer 1: Pipelines ───────────────────────────────────────────────────
+    if layer_pipe:
+        pipe_colors = {"Crude":"#e8a020","Products":"#40c8b0","LNG":"#f06060","Crude/LNG":"#a060e8","Crude/Products":"#60a8e8"}
+        for (slat,slon,elat,elon,pname,ptype) in PIPELINES:
+            # Draw as great-circle arc via intermediate points
+            lats = [slat, (slat+elat)/2 + np.random.uniform(-0.5,0.5), elat, None]
+            lons = [slon, (slon+elon)/2 + np.random.uniform(-0.5,0.5), elon, None]
+            pc = pipe_colors.get(ptype, "#6080a8")
+            fac_fig.add_trace(go.Scattergeo(
+                lat=lats, lon=lons, mode="lines",
+                line=dict(width=1.4, color=pc),
+                opacity=0.55, name=pname, showlegend=False,
+                hovertemplate=f"<b>{pname}</b><br>Product: {ptype}<extra></extra>",
+            ))
+
+    # ── Layer 2: Storage terminals ───────────────────────────────────────────
+    if layer_stor:
+        stor_colors = {"Storage":"#60a8e8","SPR":"#a060e8"}
+        for stype, grp in stor_filt.groupby("Type"):
+            sc = stor_colors.get(stype, "#60a8e8")
+            fac_fig.add_trace(go.Scattergeo(
+                lat=grp["Lat"], lon=grp["Lon"],
+                mode="markers",
+                marker=dict(
+                    size=np.clip(grp["Capacity_MMbbl"].values / 8 + 8, 8, 30),
+                    color=sc, symbol="square", opacity=0.85,
+                    line=dict(width=1.2, color="rgba(255,255,255,0.3)"),
+                ),
+                name=f"{stype}",
+                customdata=grp[["Operator","Capacity_MMbbl","Product","Status","Country"]].values,
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Operator: %{customdata[0]}<br>"
+                    "Capacity: %{customdata[1]} MMbbl<br>"
+                    "Product: %{customdata[2]}<br>"
+                    "Status: %{customdata[3]}<br>"
+                    "Country: %{customdata[4]}<extra></extra>"
+                ),
+                text=grp["Name"],
+            ))
+
+    # ── Layer 3: Refineries ──────────────────────────────────────────────────
+    if layer_ref:
+        status_colors = {
+            "Operational":"#40b860","Commissioning":"#e8a020",
+            "Partial":"#f06060","Reduced":"#a060e8",
+        }
+        for status, grp in ref_filt.groupby("Status"):
+            sc = status_colors.get(status, "#6080a8")
+            fac_fig.add_trace(go.Scattergeo(
+                lat=grp["Lat"], lon=grp["Lon"],
+                mode="markers",
+                marker=dict(
+                    size=np.clip(grp["Capacity_kbd"].values / 30 + 8, 8, 32),
+                    color=sc, symbol="circle", opacity=0.9,
+                    line=dict(width=1.2, color="rgba(255,255,255,0.25)"),
+                ),
+                name=f"Refinery — {status}",
+                customdata=grp[["Operator","Capacity_kbd","Crude","Status","Country","Region"]].values,
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Operator: %{customdata[0]}<br>"
+                    "Capacity: %{customdata[1]:,} kb/d<br>"
+                    "Crude Type: %{customdata[2]}<br>"
+                    "Status: %{customdata[3]}<br>"
+                    "Country: %{customdata[4]}<br>"
+                    "Region: %{customdata[5]}<extra></extra>"
+                ),
+                text=grp["Name"],
+            ))
+
+    fac_fig.update_layout(
+        geo=dict(
+            projection_type=proj,
+            showland=True,      landcolor="#0d1825",
+            showocean=True,     oceancolor="#07090f",
+            showcountries=True, countrycolor="#1b2d4f",
+            showlakes=True,     lakecolor="#07090f",
+            showrivers=False,
+            bgcolor="#07090f",
+            showcoastlines=True, coastlinecolor="#1b3060",
+        ),
         paper_bgcolor="#07090f",
         font=dict(color="#6080a8", family="Space Mono, monospace", size=10),
-        legend=dict(bgcolor="rgba(7,9,15,0.8)", bordercolor="#1b2d4f", borderwidth=1),
-        margin=dict(l=0,r=0,t=30,b=0), height=540,
-        title=dict(text="Major Oil & Gas Fields — bubble size ∝ reserves", font=dict(color="#c8a060", size=12)),
+        legend=dict(
+            bgcolor="rgba(7,9,15,0.85)", bordercolor="#1b2d4f", borderwidth=1,
+            x=0.01, y=0.99, font=dict(size=10),
+        ),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=600,
     )
-    st.plotly_chart(map_fig, use_container_width=True)
-    st.dataframe(fdf.rename(columns={"Reserves":"Reserves (Gboe/Bcm)"}), use_container_width=True, hide_index=True)
-    dl_button(fdf, "global_fields.csv")
+    st.plotly_chart(fac_fig, use_container_width=True)
+
+    # ── Legend explainer ─────────────────────────────────────────────────────
+    st.markdown("""
+    <div style='display:flex;gap:20px;flex-wrap:wrap;font-family:Space Mono,monospace;font-size:0.6rem;color:#4a6fa5;padding:6px 0 14px;'>
+        <span><span style='color:#40b860'>●</span> Refinery — Operational</span>
+        <span><span style='color:#e8a020'>●</span> Refinery — Commissioning</span>
+        <span><span style='color:#f06060'>●</span> Refinery — Partial</span>
+        <span><span style='color:#a060e8'>●</span> Refinery — Reduced</span>
+        <span><span style='color:#60a8e8'>■</span> Storage Terminal</span>
+        <span><span style='color:#a060e8'>■</span> Strategic Reserve (SPR)</span>
+        <span>── Pipeline (color = product type) &nbsp; bubble size = capacity</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Facility Detail Cards ────────────────────────────────────────────────
+    st.markdown("<div class='sh'>Facility Detail Cards</div>", unsafe_allow_html=True)
+
+    card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
+
+    with card_tab1:
+        card_region = st.selectbox("Region", ["All"] + sorted(REFINERIES["Region"].unique()), key="card_reg")
+        card_status = st.selectbox("Status", ["All"] + sorted(REFINERIES["Status"].unique()), key="card_stat")
+        card_df = REFINERIES.copy()
+        if card_region != "All":
+            card_df = card_df[card_df["Region"] == card_region]
+        if card_status != "All":
+            card_df = card_df[card_df["Status"] == card_status]
+        card_df = card_df.sort_values("Capacity_kbd", ascending=False)
+
+        STATUS_DOT = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠","Reduced":"🔴"}
+        cols_per_row = 3
+        for row_start in range(0, len(card_df), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for ci, (_, row) in enumerate(card_df.iloc[row_start:row_start+cols_per_row].iterrows()):
+                dot = STATUS_DOT.get(row["Status"], "⚪")
+                with cols[ci]:
+                    st.markdown(f"""
+                    <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                padding:14px 16px;margin-bottom:10px;min-height:160px;'>
+                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                                    color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
+                        <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            {row["Country"]} · {row["Region"]}
+                        </div>
+                        <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                            <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                            <b style='color:#c8a060;'>Capacity</b> {row["Capacity_kbd"]:,} kb/d<br>
+                            <b style='color:#c8a060;'>Crude Type</b> {row["Crude"]}<br>
+                            <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        dl_button(card_df, "refineries_global.csv")
+
+    with card_tab2:
+        stor_region = st.selectbox("Region", ["All"] + sorted(STORAGE["Region"].unique()), key="stor_reg")
+        stor_df = STORAGE if stor_region == "All" else STORAGE[STORAGE["Region"] == stor_region]
+        stor_df = stor_df.sort_values("Capacity_MMbbl", ascending=False)
+
+        for row_start in range(0, len(stor_df), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for ci, (_, row) in enumerate(stor_df.iloc[row_start:row_start+cols_per_row].iterrows()):
+                stype_icon = "🛡️" if row["Type"] == "SPR" else "🗄️"
+                with cols[ci]:
+                    st.markdown(f"""
+                    <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                padding:14px 16px;margin-bottom:10px;min-height:150px;'>
+                        <div style='font-family:Syne,sans-serif;font-weight:700;font-size:0.88rem;
+                                    color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
+                        <div style='font-family:Space Mono,monospace;font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
+                            {row["Country"]} · {row["Type"]}
+                        </div>
+                        <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                            <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                            <b style='color:#c8a060;'>Capacity</b> {row["Capacity_MMbbl"]:,} MMbbl<br>
+                            <b style='color:#c8a060;'>Product</b> {row["Product"]}<br>
+                            <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        dl_button(stor_df, "storage_terminals_global.csv")
+
+    # ── Summary stats ────────────────────────────────────────────────────────
+    st.markdown("<div class='sh'>Global Capacity Summary</div>", unsafe_allow_html=True)
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Total Refineries",       f"{len(ref_filt)}",                               "in current filter")
+    s2.metric("Total Refining Capacity",f"{ref_filt['Capacity_kbd'].sum():,} kb/d",       f"{ref_filt['Capacity_kbd'].sum()/1000:.1f} Mb/d")
+    s3.metric("Storage Terminals",      f"{len(stor_filt)}",                              "in current filter")
+    s4.metric("Total Storage Capacity", f"{stor_filt['Capacity_MMbbl'].sum():,} MMbbl",   "strategic + commercial")
 
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 8 · GEOPOLITICAL NEWS                  ║
