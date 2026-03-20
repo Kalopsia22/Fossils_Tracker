@@ -1859,6 +1859,47 @@ with tab_map:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Summary stats (always visible, above selector) ──────────────────────
+    st.markdown("<div class='sh'>Global Capacity Summary</div>", unsafe_allow_html=True)
+    total_ref_cap  = ref_filt["Capacity_kbd"].sum()
+    total_stor_cap = stor_filt["Capacity_MMbbl"].sum()
+    st.markdown(f"""
+    <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:4px 0 24px;'>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--gold);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;color:var(--muted);
+                        letter-spacing:0.16em;text-transform:uppercase;margin-bottom:8px;'>Total Refineries</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);line-height:1;'>{len(ref_filt)}</div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);margin-top:6px;'>in current filter</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--teal);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;color:var(--muted);
+                        letter-spacing:0.16em;text-transform:uppercase;margin-bottom:8px;'>Refining Capacity</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);line-height:1;'>{total_ref_cap/1000:.1f} <span style='font-size:1.1rem;color:var(--text3);'>Mb/d</span></div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);margin-top:6px;'>{total_ref_cap:,} kb/d total</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--blue);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;color:var(--muted);
+                        letter-spacing:0.16em;text-transform:uppercase;margin-bottom:8px;'>Storage Terminals</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);line-height:1;'>{len(stor_filt)}</div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);margin-top:6px;'>in current filter</div>
+        </div>
+        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
+                    border:1px solid var(--border);border-top:2px solid var(--amber);
+                    border-radius:10px;padding:18px 20px;'>
+            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;color:var(--muted);
+                        letter-spacing:0.16em;text-transform:uppercase;margin-bottom:8px;'>Storage Capacity</div>
+            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);line-height:1;'>{total_stor_cap:,.0f} <span style='font-size:1.1rem;color:var(--text3);'>MMbbl</span></div>
+            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);margin-top:6px;'>strategic + commercial</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── Facility Intelligence Panel ──────────────────────────────────────────
     st.markdown("<div class='sh'>Facility Intelligence Panel</div>", unsafe_allow_html=True)
     st.markdown("""
@@ -2188,130 +2229,64 @@ with tab_map:
                 target="_blank" style='color:#e8a020;'>Open full screen ↗</a>
             </div>""", unsafe_allow_html=True)
 
-    # ── Spacer to clear column layout (prevents overlap with tall right column iframes) ──
-    st.markdown("""
-    <div style='clear:both;width:100%;min-height:32px;display:block;'></div>
-    <hr style='border-color:var(--border);margin:24px 0 20px;'>
-    """, unsafe_allow_html=True)
+        # ── Facility Detail Cards — inside if block, after columns ────────────
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        with st.expander("📋 Full Facility Database — Refineries & Storage"):
+            card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
 
-    # ── Facility Detail Cards (collapsed) ────────────────────────────────────
-    with st.expander("📋 Full Facility Database — Refineries & Storage"):
-        card_tab1, card_tab2 = st.tabs(["🏭 Refineries", "🗄️ Storage & SPR"])
+            with card_tab1:
+                card_region = st.selectbox("Region", ["All"] + sorted(REFINERIES["Region"].unique()), key="card_reg")
+                card_status = st.selectbox("Status", ["All"] + sorted(REFINERIES["Status"].unique()), key="card_stat")
+                card_df = REFINERIES.copy()
+                if card_region != "All":
+                    card_df = card_df[card_df["Region"] == card_region]
+                if card_status != "All":
+                    card_df = card_df[card_df["Status"] == card_status]
+                card_df = card_df.sort_values("Capacity_kbd", ascending=False)
+                STATUS_DOT2 = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠","Reduced":"🔴"}
+                cols_per_row = 3
+                for row_start in range(0, len(card_df), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for ci, (_, row) in enumerate(card_df.iloc[row_start:row_start+cols_per_row].iterrows()):
+                        dot2 = STATUS_DOT2.get(row["Status"], "⚪")
+                        with cols[ci]:
+                            st.markdown(f"""
+                            <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                        padding:14px 16px;margin-bottom:10px;min-height:160px;'>
+                                <div style='font-family:var(--display);font-size:0.88rem;color:#dde3ee;margin-bottom:6px;'>{dot2} {row["Name"]}</div>
+                                <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>{row["Country"]} · {row["Region"]}</div>
+                                <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                                    <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                                    <b style='color:#c8a060;'>Capacity</b> {row["Capacity_kbd"]:,} kb/d<br>
+                                    <b style='color:#c8a060;'>Crude</b> {row["Crude"]}<br>
+                                    <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                                </div>
+                            </div>""", unsafe_allow_html=True)
+                dl_button(card_df, "refineries_global.csv")
 
-        with card_tab1:
-            card_region = st.selectbox("Region", ["All"] + sorted(REFINERIES["Region"].unique()), key="card_reg")
-            card_status = st.selectbox("Status", ["All"] + sorted(REFINERIES["Status"].unique()), key="card_stat")
-            card_df = REFINERIES.copy()
-            if card_region != "All":
-                card_df = card_df[card_df["Region"] == card_region]
-            if card_status != "All":
-                card_df = card_df[card_df["Status"] == card_status]
-            card_df = card_df.sort_values("Capacity_kbd", ascending=False)
+            with card_tab2:
+                stor_region2 = st.selectbox("Region", ["All"] + sorted(STORAGE["Region"].unique()), key="stor_reg2")
+                stor_df2 = STORAGE if stor_region2 == "All" else STORAGE[STORAGE["Region"] == stor_region2]
+                stor_df2 = stor_df2.sort_values("Capacity_MMbbl", ascending=False)
+                for row_start in range(0, len(stor_df2), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for ci, (_, row) in enumerate(stor_df2.iloc[row_start:row_start+cols_per_row].iterrows()):
+                        stype_icon = "🛡️" if row["Type"] == "SPR" else "🗄️"
+                        with cols[ci]:
+                            st.markdown(f"""
+                            <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
+                                        padding:14px 16px;margin-bottom:10px;min-height:150px;'>
+                                <div style='font-family:var(--display);font-size:0.88rem;color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
+                                <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>{row["Country"]} · {row["Type"]}</div>
+                                <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
+                                    <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
+                                    <b style='color:#c8a060;'>Capacity</b> {row["Capacity_MMbbl"]:,} MMbbl<br>
+                                    <b style='color:#c8a060;'>Product</b> {row["Product"]}<br>
+                                    <b style='color:#c8a060;'>Status</b> {row["Status"]}
+                                </div>
+                            </div>""", unsafe_allow_html=True)
+                dl_button(stor_df2, "storage_terminals_global.csv")
 
-            STATUS_DOT = {"Operational":"🟢","Commissioning":"🟡","Partial":"🟠","Reduced":"🔴"}
-            cols_per_row = 3
-            for row_start in range(0, len(card_df), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for ci, (_, row) in enumerate(card_df.iloc[row_start:row_start+cols_per_row].iterrows()):
-                    dot = STATUS_DOT.get(row["Status"], "⚪")
-                    with cols[ci]:
-                        st.markdown(f"""
-                        <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
-                                    padding:14px 16px;margin-bottom:10px;min-height:160px;'>
-                            <div style='font-family:var(--display);font-weight:700;font-size:0.88rem;
-                                        color:#dde3ee;margin-bottom:6px;'>{dot} {row["Name"]}</div>
-                            <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
-                                {row["Country"]} · {row["Region"]}
-                            </div>
-                            <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
-                                <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
-                                <b style='color:#c8a060;'>Capacity</b> {row["Capacity_kbd"]:,} kb/d<br>
-                                <b style='color:#c8a060;'>Crude Type</b> {row["Crude"]}<br>
-                                <b style='color:#c8a060;'>Status</b> {row["Status"]}
-                            </div>
-                        </div>""", unsafe_allow_html=True)
-            dl_button(card_df, "refineries_global.csv")
-
-        with card_tab2:
-            stor_region = st.selectbox("Region", ["All"] + sorted(STORAGE["Region"].unique()), key="stor_reg")
-            stor_df = STORAGE if stor_region == "All" else STORAGE[STORAGE["Region"] == stor_region]
-            stor_df = stor_df.sort_values("Capacity_MMbbl", ascending=False)
-            cols_per_row = 3
-            for row_start in range(0, len(stor_df), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for ci, (_, row) in enumerate(stor_df.iloc[row_start:row_start+cols_per_row].iterrows()):
-                    stype_icon = "🛡️" if row["Type"] == "SPR" else "🗄️"
-                    with cols[ci]:
-                        st.markdown(f"""
-                        <div style='background:#0d1220;border:1px solid #1b2d4f;border-radius:8px;
-                                    padding:14px 16px;margin-bottom:10px;min-height:150px;'>
-                            <div style='font-family:var(--display);font-weight:700;font-size:0.88rem;
-                                        color:#dde3ee;margin-bottom:6px;'>{stype_icon} {row["Name"]}</div>
-                            <div style='font-family:var(--mono);font-size:0.6rem;color:#3a5a88;margin-bottom:8px;'>
-                                {row["Country"]} · {row["Type"]}
-                            </div>
-                            <div style='font-size:0.78rem;color:#8aaccc;line-height:1.7;'>
-                                <b style='color:#c8a060;'>Operator</b> {row["Operator"]}<br>
-                                <b style='color:#c8a060;'>Capacity</b> {row["Capacity_MMbbl"]:,} MMbbl<br>
-                                <b style='color:#c8a060;'>Product</b> {row["Product"]}<br>
-                                <b style='color:#c8a060;'>Status</b> {row["Status"]}
-                            </div>
-                        </div>""", unsafe_allow_html=True)
-            dl_button(stor_df, "storage_terminals_global.csv")
-
-    # ── Summary stats ────────────────────────────────────────────────────────
-    st.markdown("<div class='sh'>Global Capacity Summary</div>", unsafe_allow_html=True)
-    total_ref_cap = ref_filt['Capacity_kbd'].sum()
-    total_stor_cap = stor_filt['Capacity_MMbbl'].sum()
-    st.markdown(f"""
-    <div style='display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:4px;'>
-        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
-                    border:1px solid var(--border);border-top:2px solid var(--gold);
-                    border-radius:10px;padding:18px 20px;'>
-            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
-                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
-                        margin-bottom:8px;'>Total Refineries</div>
-            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
-                        letter-spacing:0.04em;line-height:1;'>{len(ref_filt)}</div>
-            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
-                        margin-top:6px;'>in current filter</div>
-        </div>
-        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
-                    border:1px solid var(--border);border-top:2px solid var(--teal);
-                    border-radius:10px;padding:18px 20px;'>
-            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
-                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
-                        margin-bottom:8px;'>Refining Capacity</div>
-            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
-                        letter-spacing:0.04em;line-height:1;'>{total_ref_cap/1000:.1f} <span style='font-size:1.1rem;color:var(--text3);'>Mb/d</span></div>
-            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
-                        margin-top:6px;'>{total_ref_cap:,} kb/d total</div>
-        </div>
-        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
-                    border:1px solid var(--border);border-top:2px solid var(--blue);
-                    border-radius:10px;padding:18px 20px;'>
-            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
-                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
-                        margin-bottom:8px;'>Storage Terminals</div>
-            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
-                        letter-spacing:0.04em;line-height:1;'>{len(stor_filt)}</div>
-            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
-                        margin-top:6px;'>in current filter</div>
-        </div>
-        <div style='background:linear-gradient(135deg,var(--panel),var(--panel2));
-                    border:1px solid var(--border);border-top:2px solid var(--amber);
-                    border-radius:10px;padding:18px 20px;'>
-            <div style='font-family:var(--mono);font-size:0.62rem;font-weight:600;
-                        color:var(--muted);letter-spacing:0.16em;text-transform:uppercase;
-                        margin-bottom:8px;'>Storage Capacity</div>
-            <div style='font-family:var(--display);font-size:2.2rem;color:var(--text);
-                        letter-spacing:0.04em;line-height:1;'>{total_stor_cap:,.0f} <span style='font-size:1.1rem;color:var(--text3);'>MMbbl</span></div>
-            <div style='font-family:var(--mono);font-size:0.6rem;color:var(--text3);
-                        margin-top:6px;'>strategic + commercial</div>
-        </div>
-    </div>
-    <div style='margin-bottom:20px;'></div>
-    """, unsafe_allow_html=True)
 
 # ╔══════════════════════════════════════════════╗
 # ║  TAB 8 · GEOPOLITICAL NEWS                  ║
