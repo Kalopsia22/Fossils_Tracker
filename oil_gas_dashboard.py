@@ -1036,10 +1036,12 @@ with st.sidebar:
 
     bench_ticker    = st.selectbox("Primary Benchmark", list(CRUDE_TICKERS.keys()), index=0)
     bench_sym       = CRUDE_TICKERS[bench_ticker]
+    compare_options = [k for k in CRUDE_TICKERS if k != bench_ticker]
+    compare_defaults = [k for k in ["Brent Crude (BZ=F)", "Natural Gas (NG=F)"] if k in compare_options]
     compare_tickers = st.multiselect(
         "Compare With",
-        [k for k in CRUDE_TICKERS if k != bench_ticker],
-        default=["Brent Crude (BZ=F)", "Natural Gas (NG=F)"],
+        compare_options,
+        default=compare_defaults,
     )
     compare_syms = [CRUDE_TICKERS[k] for k in compare_tickers]
 
