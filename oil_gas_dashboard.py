@@ -26,6 +26,12 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
+# ML / stats — all local, no keys, no network calls
+from sklearn.ensemble import GradientBoostingRegressor, IsolationForest
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error
+from statsmodels.tsa.seasonal import STL
+
 # ═══════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═══════════════════════════════════════════════════════════════
@@ -79,6 +85,76 @@ GEO_EVENTS = [
     ("2024-04-14", "Iran strikes Israel directly — oil surges on escalation",     "🔴"),
     ("2024-06-02", "OPEC+ extends cuts into 2025, adds voluntary rollbacks",     "🟡"),
 ]
+
+# ═══════════════════════════════════════════════════════════════
+# REFINED PRODUCTS — DOWNSTREAM SUPPLY INTELLIGENCE
+# ═══════════════════════════════════════════════════════════════
+# Products with a live, tradable futures proxy on Yahoo Finance (keyless).
+# RBOB Gasoline and NY Harbor ULSD (Heating Oil ticker) are the only two
+# refined-product futures freely available without a data-vendor key.
+TRADABLE_PRODUCTS = {
+    "Gasoline (RBOB)": {
+        "ticker": "RB=F", "unit": "$/gal", "bbl_gal": 42,
+        "note": "CBOT RBOB gasoline futures — direct market proxy.",
+    },
+    "Diesel / Heating Oil (ULSD)": {
+        "ticker": "HO=F", "unit": "$/gal", "bbl_gal": 42,
+        "note": "NYMEX heating oil futures — standard ULSD/diesel proxy.",
+    },
+    "Jet Fuel (Kerosene-type, basis proxy)": {
+        "ticker": "HO=F", "unit": "$/gal", "bbl_gal": 42,
+        "basis_factor": 1.00,
+        "note": ("No listed jet fuel future exists free of a vendor key. "
+                 "Industry practice proxies jet fuel off ULSD/heating oil "
+                 "since both are middle distillates; shown here as ULSD "
+                 "parity with a flat basis assumption. Treat as directional, "
+                 "not an exact price."),
+    },
+}
+
+# Products with NO tradable futures proxy at all — shown as a static
+# reference panel (typical US refinery yield %, EIA-published historical
+# averages) rather than forecast, so the dashboard never overclaims live
+# prediction where no live data exists.
+# Yield % = typical output per 42-gal barrel of crude at a US refinery
+# (approximate, long-run EIA average — varies by crude slate & refinery config).
+NON_TRADABLE_PRODUCTS = [
+    {"product": "Refinery Gases (still gas, LPG)", "yield_pct": 4.1,
+     "driver": "Petrochemical / heating feedstock demand",
+     "disruption_sensitivity": "Low — captive refinery use, rarely traded externally"},
+    {"product": "Naphtha", "yield_pct": 3.0,
+     "driver": "Asia petrochemical cracker demand, gasoline blending swings",
+     "disruption_sensitivity": "Medium — tracks petchem cycle & FX (USD/CNY)"},
+    {"product": "Kerosene (non-jet, illuminating)", "yield_pct": 0.5,
+     "driver": "Regional heating/lighting demand (declining, EM markets)",
+     "disruption_sensitivity": "Low"},
+    {"product": "Fuel Oil / Bunker (HSFO & VLSFO)", "yield_pct": 4.0,
+     "driver": "Marine bunker demand, IMO 2020 sulfur-cap compliance spread",
+     "disruption_sensitivity": "High — shipping demand + sulfur-spec regulation"},
+    {"product": "Asphalt / Road Oil", "yield_pct": 3.4,
+     "driver": "Seasonal construction demand, heavy-sour crude availability",
+     "disruption_sensitivity": "Medium — seasonal (summer paving season)"},
+    {"product": "Lubricating Oils & Base Oils", "yield_pct": 1.1,
+     "driver": "Automotive/industrial demand, specialty refining runs",
+     "disruption_sensitivity": "Low — niche, long contract cycles"},
+    {"product": "Paraffin Wax", "yield_pct": 0.2,
+     "driver": "Candle/packaging/industrial demand",
+     "disruption_sensitivity": "Low — very low volume"},
+    {"product": "Petroleum Jelly & Petrochemical Feedstocks", "yield_pct": 0.3,
+     "driver": "Cosmetics/pharma demand, specialty wax-oil refining",
+     "disruption_sensitivity": "Low — very low volume"},
+]
+
+# Keyword tags used to filter the existing RSS feed per refined product,
+# reusing fetch_rss_news() output rather than adding new network calls.
+PRODUCT_NEWS_KEYWORDS = {
+    "Gasoline (RBOB)": {"gasoline", "rbob", "pump price", "driving season", "refinery"},
+    "Diesel / Heating Oil (ULSD)": {"diesel", "heating oil", "distillate", "ulsd"},
+    "Jet Fuel (Kerosene-type, basis proxy)": {"jet fuel", "airline", "aviation", "kerosene"},
+    "Fuel Oil / Bunker (HSFO & VLSFO)": {"bunker", "fuel oil", "imo", "shipping", "tanker", "vlsfo"},
+    "Naphtha": {"naphtha", "petrochemical", "cracker"},
+    "Asphalt / Road Oil": {"asphalt", "paving", "road oil"},
+}
 
 # ═══════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -1013,6 +1089,218 @@ def backtest_ma_crossover(series: pd.Series, fast: int = 20, slow: int = 50) -> 
     return df.dropna(subset=["fast_ma", "slow_ma"])
 
 # ═══════════════════════════════════════════════════════════════
+# REFINED PRODUCTS — ML PIPELINE
+# ═══════════════════════════════════════════════════════════════
+# All functions below operate purely on data already fetched via
+# fetch_yf_ohlcv / fetch_yf_multi (Yahoo Finance) and fetch_rss_news().
+# No new network calls, no API keys — same "keyless" guarantee as the
+# rest of the dashboard.
+
+def compute_crack_spread(product_df: pd.DataFrame, crude_df: pd.DataFrame,
+                          bbl_gal: int = 42, basis_factor: float = 1.0) -> pd.DataFrame:
+    """
+    Classic single-product crack spread in $/bbl:
+        spread = (product_$/gal * 42 * basis_factor) - crude_$/bbl
+    This is the refiner's approximate per-barrel processing margin for
+    converting one barrel of crude into that product.
+    """
+    idx = product_df.index.intersection(crude_df.index)
+    out = pd.DataFrame(index=idx)
+    out["product_close"] = product_df.loc[idx, "Close"]
+    out["crude_close"]   = crude_df.loc[idx, "Close"]
+    out["crack_spread"]  = (out["product_close"] * bbl_gal * basis_factor) - out["crude_close"]
+    return out.dropna()
+
+def compute_321_crack(gasoline_df: pd.DataFrame, diesel_df: pd.DataFrame,
+                       crude_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Industry-standard 3:2:1 crack spread — the textbook refiner margin proxy:
+    3 barrels of crude yield ~2 barrels gasoline + 1 barrel diesel.
+        spread = [(2 * gasoline_$/bbl) + (1 * diesel_$/bbl) - (3 * crude_$/bbl)] / 3
+    """
+    idx = gasoline_df.index.intersection(diesel_df.index).intersection(crude_df.index)
+    out = pd.DataFrame(index=idx)
+    gas_bbl = gasoline_df.loc[idx, "Close"] * 42
+    dsl_bbl = diesel_df.loc[idx, "Close"] * 42
+    crude_bbl = crude_df.loc[idx, "Close"]
+    out["gasoline_bbl"] = gas_bbl
+    out["diesel_bbl"]   = dsl_bbl
+    out["crude_bbl"]    = crude_bbl
+    out["crack_321"]    = ((2 * gas_bbl) + (1 * dsl_bbl) - (3 * crude_bbl)) / 3
+    return out.dropna()
+
+def seasonal_decompose_spread(series: pd.Series, period: int = 63) -> dict:
+    """
+    STL decomposition of a crack-spread series into trend / seasonal / residual.
+    period≈63 trading days ≈ 1 quarter, capturing driving-season / heating-season
+    switches without needing years of daily history to resolve a 252-day cycle.
+    """
+    s = series.dropna()
+    if len(s) < period * 2:
+        return {"ok": False, "error": "Not enough history for seasonal decomposition"}
+    try:
+        res = STL(s, period=period, robust=True).fit()
+        return {
+            "ok": True,
+            "trend": res.trend, "seasonal": res.seasonal, "resid": res.resid,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def build_forecast_features(spread: pd.Series) -> pd.DataFrame:
+    """Feature set for the crack-spread forecaster — lagged levels, momentum,
+    rolling volatility and calendar seasonality. All derived from price alone."""
+    df = pd.DataFrame({"spread": spread}).dropna()
+    df["lag_1"]   = df["spread"].shift(1)
+    df["lag_5"]   = df["spread"].shift(5)
+    df["lag_10"]  = df["spread"].shift(10)
+    df["mom_5"]   = df["spread"].diff(5)
+    df["mom_10"]  = df["spread"].diff(10)
+    df["roll_mean_10"] = df["spread"].rolling(10).mean()
+    df["roll_std_10"]  = df["spread"].rolling(10).std()
+    df["roll_std_20"]  = df["spread"].rolling(20).std()
+    df["dow"]     = df.index.dayofweek
+    df["month"]   = df.index.month
+    df["doy_sin"] = np.sin(2 * np.pi * df.index.dayofyear / 365.25)
+    df["doy_cos"] = np.cos(2 * np.pi * df.index.dayofyear / 365.25)
+    return df.dropna()
+
+def train_crack_forecaster(spread: pd.Series, horizon: int = 5):
+    """
+    Gradient-boosted regressor forecasting the crack spread `horizon` trading
+    days ahead. Validated with walk-forward TimeSeriesSplit (never trains on
+    future data to predict the past) — reports out-of-fold MAE so the error
+    bar shown to the user is honest, not an in-sample fit.
+    """
+    feat = build_forecast_features(spread)
+    feat["target"] = feat["spread"].shift(-horizon)
+    feat = feat.dropna()
+    if len(feat) < 60:
+        return {"ok": False, "error": "Not enough history to train a forecaster"}
+
+    X_cols = ["lag_1", "lag_5", "lag_10", "mom_5", "mom_10",
+              "roll_mean_10", "roll_std_10", "roll_std_20",
+              "dow", "month", "doy_sin", "doy_cos"]
+    X, y = feat[X_cols], feat["target"]
+
+    tscv = TimeSeriesSplit(n_splits=5)
+    fold_mae = []
+    for train_idx, test_idx in tscv.split(X):
+        m = GradientBoostingRegressor(
+            n_estimators=200, max_depth=3, learning_rate=0.05,
+            subsample=0.8, random_state=42,
+        )
+        m.fit(X.iloc[train_idx], y.iloc[train_idx])
+        pred = m.predict(X.iloc[test_idx])
+        fold_mae.append(mean_absolute_error(y.iloc[test_idx], pred))
+
+    # Final model trained on all available history for the live forecast
+    final_model = GradientBoostingRegressor(
+        n_estimators=200, max_depth=3, learning_rate=0.05,
+        subsample=0.8, random_state=42,
+    )
+    final_model.fit(X, y)
+    latest_feat = build_forecast_features(spread)[X_cols].iloc[[-1]]
+    next_pred = final_model.predict(latest_feat)[0]
+
+    importances = pd.Series(final_model.feature_importances_, index=X_cols).sort_values(ascending=False)
+
+    return {
+        "ok": True,
+        "horizon": horizon,
+        "cv_mae": float(np.mean(fold_mae)),
+        "cv_mae_std": float(np.std(fold_mae)),
+        "n_folds": tscv.n_splits,
+        "next_pred": float(next_pred),
+        "last_actual": float(spread.dropna().iloc[-1]),
+        "feature_importances": importances,
+        "n_train_rows": len(feat),
+    }
+
+def detect_supply_stress(spread: pd.Series, contamination: float = 0.05) -> dict:
+    """
+    Isolation Forest anomaly detector on crack-spread level + short-term
+    volatility + rate of change. Flags trading days that look statistically
+    unusual vs. the trailing history — used as a proxy for "supply stress"
+    (unexpected margin blowouts/collapses that often precede or accompany
+    refinery outages, sanctions, or demand shocks).
+    """
+    df = pd.DataFrame({"spread": spread}).dropna()
+    df["chg_1"]  = df["spread"].diff(1)
+    df["chg_5"]  = df["spread"].diff(5)
+    df["roll_std_10"] = df["spread"].rolling(10).std()
+    df = df.dropna()
+    if len(df) < 40:
+        return {"ok": False, "error": "Not enough history for anomaly detection"}
+
+    feats = df[["spread", "chg_1", "chg_5", "roll_std_10"]]
+    model = IsolationForest(contamination=contamination, random_state=42, n_estimators=200)
+    df["anomaly"] = model.fit_predict(feats)          # -1 = anomaly, 1 = normal
+    df["anomaly_score"] = model.decision_function(feats)  # lower = more anomalous
+
+    anomalies = df[df["anomaly"] == -1].sort_index(ascending=False)
+    return {
+        "ok": True, "df": df, "anomalies": anomalies,
+        "n_anomalies": len(anomalies),
+        "latest_is_anomaly": bool(df["anomaly"].iloc[-1] == -1),
+        "latest_score": float(df["anomaly_score"].iloc[-1]),
+    }
+
+# Small, hand-built energy-domain sentiment lexicon — deliberately not a
+# downloaded model, so it works offline / on a locked-down cloud network
+# with zero extra dependencies or corpus downloads.
+_POS_WORDS = {
+    "increase", "increases", "increased", "growth", "surplus", "expand", "expansion",
+    "recovery", "rebound", "boost", "record", "strong", "stable", "resume", "resumed",
+    "agreement", "deal", "ease", "easing", "relief", "improve", "improved",
+}
+_NEG_WORDS = {
+    "disruption", "disrupted", "shortage", "outage", "shutdown", "shut", "halt", "halted",
+    "sanction", "sanctions", "attack", "strike", "strikes", "war", "conflict", "crisis",
+    "cut", "cuts", "decline", "declined", "plunge", "collapse", "delay", "delayed",
+    "shortfall", "spike", "surge", "risk", "threat", "blockade", "explosion", "fire",
+    "leak", "spill", "unrest", "embargo",
+}
+
+def score_article_sentiment(title: str, desc: str) -> int:
+    text = f"{title} {desc}".lower()
+    pos = sum(1 for w in _POS_WORDS if w in text)
+    neg = sum(1 for w in _NEG_WORDS if w in text)
+    return pos - neg
+
+def compute_product_disruption_scores(articles: list) -> pd.DataFrame:
+    """
+    Tags each already-fetched RSS article against every refined product's
+    keyword set, scores sentiment with the lexicon above, and rolls up into
+    a per-product article count + net sentiment — a lightweight, fully
+    keyless substitute for a trained NLP classifier.
+    """
+    rows = []
+    for product, keywords in PRODUCT_NEWS_KEYWORDS.items():
+        matched = []
+        for a in articles:
+            combined = f"{a.get('title','')} {a.get('description','')}".lower()
+            if any(kw in combined for kw in keywords):
+                matched.append(a)
+        if not matched:
+            rows.append({"product": product, "article_count": 0,
+                         "net_sentiment": 0, "risk_flag": "No recent coverage"})
+            continue
+        scores = [score_article_sentiment(a.get("title", ""), a.get("description", "")) for a in matched]
+        net = sum(scores)
+        if net <= -2:
+            flag = "🔴 Elevated disruption chatter"
+        elif net < 0:
+            flag = "🟠 Mild negative signal"
+        elif net == 0:
+            flag = "🟡 Neutral"
+        else:
+            flag = "🟢 Stable / positive"
+        rows.append({"product": product, "article_count": len(matched),
+                     "net_sentiment": net, "risk_flag": flag})
+    return pd.DataFrame(rows)
+
+# ═══════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -1113,9 +1401,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 # TABS
 # ═══════════════════════════════════════════════════════════════
 (tab_price, tab_vol, tab_corr, tab_bt,
- tab_macro, tab_av, tab_map, tab_news) = st.tabs([
+ tab_macro, tab_av, tab_map, tab_products, tab_news) = st.tabs([
     "📈 Price & OHLCV", "📊 Volatility", "🔗 Correlations", "⚙️ Backtesting",
-    "🌍 Macro & FRED",  "📦 Commodities", "🏭 Facility Map", "📰 Geopolitical",
+    "🌍 Macro & FRED",  "📦 Commodities", "🏭 Facility Map",
+    "🧪 Refined Products", "📰 Geopolitical",
 ])
 
 # ╔══════════════════════════════════════════════╗
@@ -2298,10 +2587,218 @@ with tab_map:
 
 
 # ╔══════════════════════════════════════════════╗
-# ║  TAB 8 · GEOPOLITICAL NEWS                  ║
+# ║  TAB 8 · REFINED PRODUCTS (ML)              ║
+# ╚══════════════════════════════════════════════╝
+with tab_products:
+    st.markdown("<div class='sh'>⚗️ Downstream Refined Product Intelligence</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    Crude oil is a single input to a <b>joint-output</b> refining process — every barrel
+    is cracked into a fixed slate of products simultaneously. Only two refined products
+    have a free, keyless, tradable futures price (RBOB Gasoline &amp; NY Harbor Heating
+    Oil / ULSD). Those two are forecast live below with a walk-forward-validated ML model.
+    Products without a tradable proxy (Naphtha, Fuel Oil, Asphalt, Lubricants, Wax,
+    Petroleum Jelly, etc.) are shown as a static EIA-benchmark reference panel rather
+    than force-fit into a forecast with no live data behind it.
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.spinner("Fetching refined-product & crude series…"):
+        gasoline_res = fetch_yf_ohlcv("RB=F", period="2y")
+        diesel_res   = fetch_yf_ohlcv("HO=F", period="2y")
+        crude_for_products_res = fetch_yf_ohlcv(bench_sym, period="2y")
+
+    if not (gasoline_res["ok"] and diesel_res["ok"] and crude_for_products_res["ok"]):
+        err_box("One or more product/crude series failed to fetch — refined-products "
+                "analysis needs Gasoline, Diesel and the selected benchmark crude.")
+    else:
+        gdf, ddf, cdf = gasoline_res["df"], diesel_res["df"], crude_for_products_res["df"]
+
+        st.markdown("<div class='sh' style='font-size:0.85rem;'>📐 Model Controls</div>", unsafe_allow_html=True)
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            product_choice = st.selectbox(
+                "Product to forecast",
+                list(TRADABLE_PRODUCTS.keys()),
+                index=0,
+            )
+        with pc2:
+            forecast_horizon = st.slider("Forecast horizon (trading days ahead)", 1, 20, 5)
+
+        meta = TRADABLE_PRODUCTS[product_choice]
+        product_res = fetch_yf_ohlcv(meta["ticker"], period="2y")
+        if not product_res["ok"]:
+            err_box(f"Could not fetch {meta['ticker']}: {product_res.get('error')}")
+        else:
+            pdf = product_res["df"]
+            spread_df = compute_crack_spread(
+                pdf, cdf, bbl_gal=meta["bbl_gal"], basis_factor=meta.get("basis_factor", 1.0)
+            )
+            st.markdown(f"<div class='prov'>▸ {meta['note']}</div>", unsafe_allow_html=True)
+
+            # ── Crack spread chart ─────────────────────────────
+            st.markdown("<div class='sh' style='font-size:0.85rem;'>Crack Spread History ($/bbl)</div>",
+                        unsafe_allow_html=True)
+            fig_spread = go.Figure()
+            fig_spread.add_trace(go.Scatter(
+                x=spread_df.index, y=spread_df["crack_spread"],
+                mode="lines", line=dict(color=PALETTE["WTI"], width=1.6),
+                fill="tozeroy", fillcolor=rgba(PALETTE["WTI"], 0.08),
+                name="Crack spread",
+            ))
+            apply_theme(fig_spread, title=f"{product_choice} crack spread vs {bench_ticker}", height=340)
+            st.plotly_chart(fig_spread, use_container_width=True)
+
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("Latest crack spread", f"${spread_df['crack_spread'].iloc[-1]:.2f}/bbl")
+            sc2.metric("30D avg", f"${spread_df['crack_spread'].tail(30).mean():.2f}/bbl")
+            sc3.metric("30D volatility (σ)", f"${spread_df['crack_spread'].tail(30).std():.2f}/bbl")
+
+            # ── ML forecast ─────────────────────────────────────
+            st.markdown("<div class='sh' style='font-size:0.85rem;'>ML Forecast — Gradient Boosted Regressor</div>",
+                        unsafe_allow_html=True)
+            with st.spinner("Training walk-forward validated forecaster…"):
+                fc = train_crack_forecaster(spread_df["crack_spread"], horizon=forecast_horizon)
+
+            if not fc["ok"]:
+                err_box(fc.get("error", "Forecast failed"))
+            else:
+                fcol1, fcol2, fcol3 = st.columns(3)
+                delta = fc["next_pred"] - fc["last_actual"]
+                fcol1.metric("Last actual", f"${fc['last_actual']:.2f}/bbl")
+                fcol2.metric(f"Predicted (+{forecast_horizon}d)", f"${fc['next_pred']:.2f}/bbl",
+                             f"{delta:+.2f}")
+                fcol3.metric("Walk-forward MAE", f"±${fc['cv_mae']:.2f}/bbl",
+                             f"{fc['n_folds']}-fold CV")
+                st.markdown(
+                    f"<div class='prov'>▸ Model: GradientBoostingRegressor · trained on "
+                    f"{fc['n_train_rows']} rows · TimeSeriesSplit walk-forward validation "
+                    f"(never trains on future data to predict the past) · "
+                    f"MAE std across folds ±${fc['cv_mae_std']:.2f}</div>",
+                    unsafe_allow_html=True,
+                )
+
+                with st.expander("📊 Feature importances"):
+                    imp_df = fc["feature_importances"].reset_index()
+                    imp_df.columns = ["feature", "importance"]
+                    fig_imp = go.Figure(go.Bar(
+                        x=imp_df["importance"], y=imp_df["feature"], orientation="h",
+                        marker_color=PALETTE["Brent"],
+                    ))
+                    apply_theme(fig_imp, title="What drives the forecast", height=320)
+                    st.plotly_chart(fig_imp, use_container_width=True)
+
+            # ── Seasonal decomposition ──────────────────────────
+            with st.expander("📅 Seasonal decomposition (STL)"):
+                decomp = seasonal_decompose_spread(spread_df["crack_spread"])
+                if not decomp["ok"]:
+                    err_box(decomp.get("error"))
+                else:
+                    fig_dc = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                                            subplot_titles=("Trend", "Seasonal (quarterly cycle)", "Residual"))
+                    fig_dc.add_trace(go.Scatter(x=decomp["trend"].index, y=decomp["trend"],
+                                                 line=dict(color=PALETTE["WTI"])), row=1, col=1)
+                    fig_dc.add_trace(go.Scatter(x=decomp["seasonal"].index, y=decomp["seasonal"],
+                                                 line=dict(color=PALETTE["Brent"])), row=2, col=1)
+                    fig_dc.add_trace(go.Scatter(x=decomp["resid"].index, y=decomp["resid"],
+                                                 line=dict(color=PALETTE["purple"])), row=3, col=1)
+                    apply_theme(fig_dc, height=520)
+                    fig_dc.update_layout(showlegend=False)
+                    st.plotly_chart(fig_dc, use_container_width=True)
+                    st.markdown(
+                        "<div class='prov'>▸ STL period = 63 trading days (~1 quarter) to "
+                        "capture driving-season / heating-season switches</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            # ── Supply stress / anomaly detection ───────────────
+            st.markdown("<div class='sh' style='font-size:0.85rem;'>🚨 Supply Stress Detector — Isolation Forest</div>",
+                        unsafe_allow_html=True)
+            stress = detect_supply_stress(spread_df["crack_spread"])
+            if not stress["ok"]:
+                err_box(stress.get("error"))
+            else:
+                if stress["latest_is_anomaly"]:
+                    err_box(f"Latest session flagged as anomalous (score {stress['latest_score']:.3f}) — "
+                            f"crack spread is moving outside its normal statistical range.")
+                else:
+                    st.markdown(
+                        f"<div class='info-box'>Latest session is within normal range "
+                        f"(anomaly score {stress['latest_score']:.3f}). "
+                        f"{stress['n_anomalies']} anomalous sessions detected in the trailing history.</div>",
+                        unsafe_allow_html=True,
+                    )
+                sdf = stress["df"]
+                fig_anom = go.Figure()
+                fig_anom.add_trace(go.Scatter(
+                    x=sdf.index, y=sdf["spread"], mode="lines",
+                    line=dict(color=PALETTE["white"], width=1.2), name="Crack spread",
+                ))
+                anom_pts = sdf[sdf["anomaly"] == -1]
+                fig_anom.add_trace(go.Scatter(
+                    x=anom_pts.index, y=anom_pts["spread"], mode="markers",
+                    marker=dict(color=PALETTE["red"], size=7, symbol="x"),
+                    name="Flagged anomaly",
+                ))
+                apply_theme(fig_anom, title="Anomalous crack-spread sessions", height=340)
+                st.plotly_chart(fig_anom, use_container_width=True)
+                dl_button(stress["anomalies"].reset_index(), f"{meta['ticker']}_supply_stress_flags.csv")
+
+        st.markdown("---")
+
+        # ── Per-product news-derived disruption score ───────────
+        st.markdown("<div class='sh'>📰 Per-Product Disruption Signal (from live RSS feed)</div>",
+                    unsafe_allow_html=True)
+        news_res_products = fetch_rss_news()
+        if not news_res_products["ok"]:
+            err_box("News feed unavailable — disruption signal needs the RSS feeds "
+                    "used in the Geopolitical tab.")
+        else:
+            disr_df = compute_product_disruption_scores(news_res_products["articles"])
+            st.dataframe(
+                disr_df.rename(columns={
+                    "product": "Product", "article_count": "Articles (recent)",
+                    "net_sentiment": "Net Sentiment Score", "risk_flag": "Signal",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            st.markdown(
+                "<div class='prov'>▸ Lightweight lexicon-based sentiment over "
+                f"{news_res_products.get('count','')} live articles (Reuters/BBC/Al Jazeera/"
+                "OilPrice/Rigzone) — a keyless, dependency-free substitute for a trained "
+                "NLP classifier. Not investment advice.</div>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("---")
+
+        # ── Non-tradable product reference panel ─────────────────
+        st.markdown("<div class='sh'>📋 Non-Tradable Products — Reference Panel</div>", unsafe_allow_html=True)
+        st.markdown("""
+        <div class='info-box'>
+        These products have no free live futures price, so no forecast is shown for
+        them — showing a fabricated prediction here would overstate what the free data
+        actually supports. Typical yield % is a long-run US refinery average
+        (EIA-published order of magnitude); actual output varies by crude slate and
+        refinery configuration.
+        </div>
+        """, unsafe_allow_html=True)
+        ref_df = pd.DataFrame(NON_TRADABLE_PRODUCTS)
+        st.dataframe(
+            ref_df.rename(columns={
+                "product": "Product", "yield_pct": "Typical Yield (%/bbl)",
+                "driver": "Primary Demand Driver", "disruption_sensitivity": "Disruption Sensitivity",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+        dl_button(ref_df, "non_tradable_product_reference.csv")
+
+
+# ╔══════════════════════════════════════════════╗
+# ║  TAB 9 · GEOPOLITICAL NEWS                  ║
 # ╚══════════════════════════════════════════════╝
 # ╔══════════════════════════════════════════════╗
-# ║  TAB 8 · GEOPOLITICAL (Live RSS)            ║
+# ║  TAB 9 · GEOPOLITICAL (Live RSS)            ║
 # ╚══════════════════════════════════════════════╝
 with tab_news:
     st.markdown("<div class='sh'>Live Energy & Geopolitical News</div>", unsafe_allow_html=True)
