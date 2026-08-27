@@ -25,6 +25,18 @@ from plotly.subplots import make_subplots
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+import json
+import time
+import asyncio
+
+# Optional — only needed for the live AIS (AISStream.io) adapter. The app
+# runs fully in demo mode without it; this just enables the "Live AIS" path.
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+
 
 # ML / stats — all local, no keys, no network calls
 from sklearn.ensemble import GradientBoostingRegressor, IsolationForest
@@ -1362,7 +1374,491 @@ def compute_product_disruption_scores(articles: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 # ═══════════════════════════════════════════════════════════════
-# SIDEBAR
+# SHIP TRACKING — DEMO AIS SIMULATION + AI/ML LAYER
+# ═══════════════════════════════════════════════════════════════
+# NOTE ON SCOPE: this reproduces the analytical core of a maritime-intelligence
+# platform (simulated AIS ingestion → validation → ML → explainability →
+# alerts) inside a single Streamlit tab. It does not include a persistent
+# database, multi-page app, auth layer, or a wired-up commercial AIS API —
+# those need a real backend and are out of scope for a single dashboard tab.
+# The `get_live_ais()` stub below shows where a real provider would plug in.
+
+VESSEL_CLASS_SPECS = {
+    "Panamax": {"dwt": (60_000, 80_000),   "loa_m": (220, 245), "beam_m": 32.3,
+                "typical_speed": 13.5, "color": "#4a8cc8", "symbol": "circle"},
+    "Aframax": {"dwt": (80_000, 120_000),  "loa_m": (245, 250), "beam_m": 44,
+                "typical_speed": 13.0, "color": "#2eb8a0", "symbol": "square"},
+    "Suezmax": {"dwt": (120_000, 200_000), "loa_m": (275, 285), "beam_m": 48,
+                "typical_speed": 13.8, "color": "#d4963a", "symbol": "diamond"},
+    "VLCC":    {"dwt": (200_000, 320_000), "loa_m": (330, 335), "beam_m": 60,
+                "typical_speed": 14.5, "color": "#e05858", "symbol": "triangle-up"},
+    "ULCC":    {"dwt": (320_000, 550_000), "loa_m": (350, 415), "beam_m": 63,
+                "typical_speed": 14.0, "color": "#9060d8", "symbol": "star"},
+}
+
+# Major crude-trade hub ports — used as synthetic origin/destination pairs.
+MAJOR_PORTS = [
+    {"name": "Ras Tanura, Saudi Arabia",  "lat": 26.64,  "lon": 50.16, "region": "Middle East Gulf"},
+    {"name": "Fujairah, UAE",             "lat": 25.11,  "lon": 56.34, "region": "Middle East Gulf"},
+    {"name": "Kharg Island, Iran",        "lat": 29.23,  "lon": 50.31, "region": "Middle East Gulf"},
+    {"name": "Houston, USA",              "lat": 29.75,  "lon": -95.05,"region": "US Gulf Coast"},
+    {"name": "Corpus Christi, USA",       "lat": 27.80,  "lon": -97.40,"region": "US Gulf Coast"},
+    {"name": "Rotterdam, Netherlands",    "lat": 51.95,  "lon": 4.14,  "region": "Northwest Europe"},
+    {"name": "Sikka, India",              "lat": 22.43,  "lon": 69.83, "region": "Indian Subcontinent"},
+    {"name": "Singapore",                 "lat": 1.26,   "lon": 103.82,"region": "Southeast Asia"},
+    {"name": "Ningbo-Zhoushan, China",    "lat": 29.95,  "lon": 122.20,"region": "East Asia"},
+    {"name": "Yeosu, South Korea",        "lat": 34.74,  "lon": 127.74,"region": "East Asia"},
+    {"name": "Primorsk, Russia",          "lat": 60.33,  "lon": 28.68, "region": "Baltic"},
+    {"name": "Novorossiysk, Russia",      "lat": 44.72,  "lon": 37.78, "region": "Black Sea"},
+    {"name": "Bonny Island, Nigeria",     "lat": 4.44,   "lon": 7.17,  "region": "West Africa"},
+    {"name": "Ceyhan, Turkey",            "lat": 36.75,  "lon": 35.80, "region": "Eastern Mediterranean"},
+    {"name": "Panama Canal (transit)",    "lat": 9.08,   "lon": -79.68,"region": "Central America"},
+    {"name": "Suez Canal (transit)",      "lat": 30.60,  "lon": 32.35, "region": "Red Sea / Suez"},
+    {"name": "Strait of Hormuz",          "lat": 26.57,  "lon": 56.25, "region": "Middle East Gulf"},
+    {"name": "Malacca Strait",            "lat": 2.80,   "lon": 101.10,"region": "Southeast Asia"},
+]
+
+FLAG_STATES = ["Panama", "Liberia", "Marshall Islands", "Malta", "Singapore",
+               "Hong Kong", "Greece", "Bahamas", "Cyprus", "Japan"]
+
+NAV_STATUSES = ["Underway", "At Anchor", "Moored", "Restricted Maneuverability"]
+
+
+def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    """Great-circle distance in km."""
+    R = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dl = np.radians(lon2 - lon1)
+    a = np.sin(dphi/2)**2 + np.cos(p1)*np.cos(p2)*np.sin(dl/2)**2
+    return 2 * R * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def _cross_track_km(lat, lon, lat1, lon1, lat2, lon2) -> float:
+    """Approximate cross-track (route deviation) distance of point (lat,lon)
+    from the great-circle path between (lat1,lon1) and (lat2,lon2), in km."""
+    R = 6371.0
+    d13 = _haversine_km(lat1, lon1, lat, lon) / R
+    brng13 = np.arctan2(
+        np.sin(np.radians(lon - lon1)) * np.cos(np.radians(lat)),
+        np.cos(np.radians(lat1)) * np.sin(np.radians(lat)) -
+        np.sin(np.radians(lat1)) * np.cos(np.radians(lat)) * np.cos(np.radians(lon - lon1))
+    )
+    brng12 = np.arctan2(
+        np.sin(np.radians(lon2 - lon1)) * np.cos(np.radians(lat2)),
+        np.cos(np.radians(lat1)) * np.sin(np.radians(lat2)) -
+        np.sin(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.cos(np.radians(lon2 - lon1))
+    )
+    xtd = np.arcsin(np.sin(d13) * np.sin(brng13 - brng12)) * R
+    return float(abs(xtd))
+
+
+@st.cache_data(show_spinner=False)
+def generate_demo_fleet(n_vessels: int = 120, seed: int = 42, tick: int = 0) -> pd.DataFrame:
+    """
+    Synthetic AIS fleet generator — 100% offline, no external API.
+    `tick` advances every simulated vessel a step along its origin→destination
+    great-circle route, acting as a stand-in for "live" movement between
+    reruns (see the ⏭ Advance Simulated Time control in the tab).
+    Deliberately bakes in a small % of intentional anomalies (speed drop,
+    route deviation, AIS gap, prolonged loitering) so the ML layer below has
+    something real to detect, per the brief's testing requirement.
+    """
+    rng = np.random.default_rng(seed)
+    classes = list(VESSEL_CLASS_SPECS.keys())
+    rows = []
+    for i in range(n_vessels):
+        vclass = rng.choice(classes, p=[0.28, 0.24, 0.20, 0.20, 0.08])
+        spec = VESSEL_CLASS_SPECS[vclass]
+        origin, dest = rng.choice(MAJOR_PORTS, size=2, replace=False)
+        frac = rng.uniform(0.05, 0.95)   # progress along the route
+
+        # Planned position: straight lat/lon lerp along the route (fine
+        # approximation at this zoom level for a demo dashboard).
+        planned_lat = origin["lat"] + (dest["lat"] - origin["lat"]) * frac
+        planned_lon = origin["lon"] + (dest["lon"] - origin["lon"]) * frac
+        lat, lon = planned_lat, planned_lon
+
+        base_speed = spec["typical_speed"] * rng.uniform(0.85, 1.1)
+        course = float(np.degrees(np.arctan2(dest["lon"] - origin["lon"], dest["lat"] - origin["lat"])) % 360)
+
+        # advance a little with each tick to simulate live movement (small
+        # jitter around the planned lerp position — NOT a route deviation
+        # by itself; deviation is measured against this same planned point
+        # below, so only genuine anomaly injection produces a large value)
+        lat += 0.02 * tick * np.sin(np.radians(course)) * rng.uniform(0.3, 0.6)
+        lon += 0.02 * tick * np.cos(np.radians(course)) * rng.uniform(0.3, 0.6)
+
+        total_dist = _haversine_km(origin["lat"], origin["lon"], dest["lat"], dest["lon"])
+        remaining_dist = _haversine_km(lat, lon, dest["lat"], dest["lon"])
+        nav_status = rng.choice(NAV_STATUSES, p=[0.72, 0.15, 0.10, 0.03])
+        speed = base_speed if nav_status == "Underway" else rng.uniform(0, 0.5)
+
+        # bake in intentional anomalies (~10% of fleet) for the ML layer to catch
+        is_anomalous = rng.random() < 0.10
+        anomaly_type = None
+        ais_gap_min = float(rng.exponential(4))
+        if is_anomalous:
+            anomaly_type = rng.choice(["speed_drop", "route_deviation", "ais_gap", "loitering"])
+            if anomaly_type == "speed_drop":
+                speed *= rng.uniform(0.15, 0.4)
+            elif anomaly_type == "route_deviation":
+                lat += rng.uniform(-1.5, 1.5) * rng.choice([-1, 1])
+                lon += rng.uniform(-1.5, 1.5) * rng.choice([-1, 1])
+            elif anomaly_type == "ais_gap":
+                ais_gap_min += rng.uniform(45, 180)
+            elif anomaly_type == "loitering":
+                speed = rng.uniform(0, 0.3)
+                nav_status = "At Anchor"
+
+        # Route deviation = distance between actual (post-jitter/anomaly)
+        # position and the planned lerp position at the same progress
+        # fraction — small (a few km of GPS/AIS jitter) for nominal
+        # vessels, large only where an anomaly was actually injected above.
+        deviation_km = _haversine_km(lat, lon, planned_lat, planned_lon)
+
+        # Scheduled ETA on the SAME basis as the prediction target
+        # (remaining distance at class-typical speed) so "deviation" means
+        # a genuine predicted delay, not an artifact of comparing total-
+        # voyage time against a partially-completed voyage.
+        eta_hours_scheduled = (remaining_dist / spec["typical_speed"]) if spec["typical_speed"] > 0 else 0
+        # ground-truth simulated ETA (what the ML model tries to recover)
+        congestion_factor = rng.uniform(0.95, 1.25)
+        true_eta_hours = ((remaining_dist / max(speed, 1.0)) * congestion_factor if speed > 0.5
+                          else remaining_dist / spec["typical_speed"] * rng.uniform(0.9, 1.5))
+
+
+        draught = rng.uniform(*[d/1000*8 for d in spec["dwt"]])
+        imo = 9_000_000 + rng.integers(0, 999_999)
+        mmsi = 200_000_000 + rng.integers(0, 99_999_999)
+
+        # trailing synthetic track (last ~12 points back toward origin)
+        track_lats = np.linspace(origin["lat"], lat, 12) + rng.normal(0, 0.05, 12)
+        track_lons = np.linspace(origin["lon"], lon, 12) + rng.normal(0, 0.05, 12)
+
+        rows.append({
+            "imo": int(imo), "mmsi": int(mmsi),
+            "name": f"MT {vclass.upper()}-{i+1:03d}",
+            "vessel_class": vclass, "flag": rng.choice(FLAG_STATES),
+            "lat": float(lat), "lon": float(lon),
+            "speed_kn": round(float(max(speed, 0)), 1),
+            "course_deg": round(course, 1), "heading_deg": round((course + rng.uniform(-8, 8)) % 360, 1),
+            "nav_status": nav_status,
+            "origin": origin["name"], "destination": dest["name"], "region": dest["region"],
+            "draught_m": round(float(draught), 1),
+            "loa_m": round(rng.uniform(*spec["loa_m"]), 0), "beam_m": spec["beam_m"],
+            "cargo_category": "Crude Oil" if rng.random() < 0.75 else "Refined Products",
+            "last_ais_min_ago": round(ais_gap_min, 1),
+            "total_dist_km": round(total_dist, 0), "remaining_dist_km": round(remaining_dist, 0),
+            "eta_scheduled_h": round(eta_hours_scheduled, 1), "eta_true_h": round(max(true_eta_hours, 0.5), 1),
+            "route_deviation_km": round(deviation_km, 1),
+            "is_anomalous_ground_truth": is_anomalous, "anomaly_type": anomaly_type,
+            "track_lats": track_lats.tolist(), "track_lons": track_lons.tolist(),
+        })
+    return pd.DataFrame(rows)
+
+
+def train_eta_model(fleet: pd.DataFrame):
+    """
+    GradientBoostingRegressor predicting remaining voyage hours from
+    operational features. Trained on the synthetic fleet snapshot itself
+    (this is a demo dataset — a production system would train on months of
+    historical completed voyages). Uses quantile regression (10th/90th
+    percentile) for an honest prediction interval rather than a bare point
+    estimate.
+    """
+    feat_cols = ["remaining_dist_km", "speed_kn", "draught_m", "route_deviation_km", "last_ais_min_ago"]
+    X = pd.get_dummies(fleet[feat_cols + ["vessel_class"]], columns=["vessel_class"])
+    y = fleet["eta_true_h"]
+
+    model_mid = GradientBoostingRegressor(n_estimators=150, max_depth=3, learning_rate=0.08,
+                                          loss="quantile", alpha=0.5, random_state=42)
+    model_lo  = GradientBoostingRegressor(n_estimators=150, max_depth=3, learning_rate=0.08,
+                                          loss="quantile", alpha=0.10, random_state=42)
+    model_hi  = GradientBoostingRegressor(n_estimators=150, max_depth=3, learning_rate=0.08,
+                                          loss="quantile", alpha=0.90, random_state=42)
+    model_mid.fit(X, y); model_lo.fit(X, y); model_hi.fit(X, y)
+
+    pred_mid = model_mid.predict(X)
+    pred_lo  = model_lo.predict(X)
+    pred_hi  = model_hi.predict(X)
+    mae = mean_absolute_error(y, pred_mid)
+
+    out = fleet.copy()
+    out["eta_pred_h"] = np.round(pred_mid, 1)
+    out["eta_pred_lo_h"] = np.round(np.minimum(pred_lo, pred_mid), 1)
+    out["eta_pred_hi_h"] = np.round(np.maximum(pred_hi, pred_mid), 1)
+    out["eta_deviation_h"] = np.round(out["eta_pred_h"] - out["eta_scheduled_h"], 1)
+    out["eta_confidence_pct"] = np.round(100 * (1 - (out["eta_pred_hi_h"] - out["eta_pred_lo_h"]) /
+                                                 out["eta_pred_h"].clip(lower=1)).clip(0, 1), 0)
+    return out, {"mae_h": float(mae), "n_features": X.shape[1], "n_vessels": len(fleet)}
+
+
+def detect_ais_anomalies(fleet: pd.DataFrame):
+    """
+    IsolationForest across operational features → 0-100 Anomaly Score.
+    Flags: unexpected speed changes, route deviation, AIS transmission gaps,
+    and loitering-like low-speed/anchor combinations.
+    """
+    feat_cols = ["speed_kn", "route_deviation_km", "last_ais_min_ago"]
+    X = fleet[feat_cols].copy()
+    X["speed_vs_class_typical"] = fleet.apply(
+        lambda r: r["speed_kn"] - VESSEL_CLASS_SPECS[r["vessel_class"]]["typical_speed"], axis=1)
+
+    model = IsolationForest(contamination=0.12, random_state=42, n_estimators=200)
+    raw_flag = model.fit_predict(X)                      # -1 anomaly, 1 normal
+    raw_score = model.decision_function(X)                # higher = more normal
+
+    # rescale decision_function to an intuitive 0-100 "risk-style" anomaly score
+    lo, hi = raw_score.min(), raw_score.max()
+    anomaly_score = 100 * (1 - (raw_score - lo) / (hi - lo + 1e-9))
+
+    out = fleet.copy()
+    out["ml_anomaly_flag"] = raw_flag == -1
+    out["ai_anomaly_score"] = np.round(anomaly_score, 0)
+    return out
+
+
+def compute_operational_risk(fleet: pd.DataFrame) -> pd.DataFrame:
+    """
+    Explainable, weighted composite Operational Risk Indicator (0-100).
+    Deliberately excludes flag state / nationality / geographic origin as
+    inputs — risk is driven only by observable operational behavior, per the
+    fairness requirement (no proxy variables for nationality/flag/geography).
+    """
+    out = fleet.copy()
+    ais_component   = (out["last_ais_min_ago"] / 60).clip(0, 1) * 25          # up to 25 pts
+    dev_component   = (out["route_deviation_km"] / 200).clip(0, 1) * 30       # up to 30 pts
+    anomaly_component = (out["ai_anomaly_score"] / 100) * 25                  # up to 25 pts
+    eta_component   = (out["eta_deviation_h"].abs() / 12).clip(0, 1) * 20     # up to 20 pts
+    out["operational_risk"] = np.round(
+        ais_component + dev_component + anomaly_component + eta_component, 0
+    ).clip(0, 100)
+
+    def _explain(row):
+        factors = []
+        if row["last_ais_min_ago"] > 30:
+            factors.append(f"AIS transmission gap of {row['last_ais_min_ago']:.0f} min")
+        if row["route_deviation_km"] > 50:
+            factors.append(f"{row['route_deviation_km']:.0f} km route deviation")
+        if row["ai_anomaly_score"] > 60:
+            factors.append(f"Elevated behavioral anomaly score ({row['ai_anomaly_score']:.0f}/100)")
+        if abs(row["eta_deviation_h"]) > 6:
+            factors.append(f"ETA deviation of {row['eta_deviation_h']:+.1f}h vs schedule")
+        if row["speed_kn"] < 1.0 and row["nav_status"] == "At Anchor":
+            factors.append("Prolonged low-speed / loitering pattern")
+        if not factors:
+            factors.append("No significant contributing factors — nominal operation")
+        return factors
+    out["risk_factors"] = out.apply(_explain, axis=1)
+    out["risk_tier"] = pd.cut(out["operational_risk"], bins=[-1, 30, 60, 100],
+                              labels=["🟢 Low", "🟡 Elevated", "🔴 High"])
+    return out
+
+
+def build_fleet_alerts(fleet: pd.DataFrame, eta_delay_thresh: float, dev_thresh: float,
+                       gap_thresh: float, risk_thresh: float) -> pd.DataFrame:
+    """Configurable rule-based alert engine over the AI-scored fleet."""
+    alerts = []
+    for _, r in fleet.iterrows():
+        if r["eta_deviation_h"] > eta_delay_thresh:
+            alerts.append({"vessel": r["name"], "type": "⏱ ETA Delay", "severity": "High" if r["eta_deviation_h"] > eta_delay_thresh*2 else "Medium",
+                           "detail": f"Predicted +{r['eta_deviation_h']:.1f}h vs scheduled ETA"})
+        if r["route_deviation_km"] > dev_thresh:
+            alerts.append({"vessel": r["name"], "type": "🧭 Route Deviation", "severity": "High" if r["route_deviation_km"] > dev_thresh*2 else "Medium",
+                           "detail": f"{r['route_deviation_km']:.0f} km off expected great-circle route"})
+        if r["last_ais_min_ago"] > gap_thresh:
+            alerts.append({"vessel": r["name"], "type": "📡 AIS Gap", "severity": "High" if r["last_ais_min_ago"] > gap_thresh*2 else "Medium",
+                           "detail": f"No AIS update for {r['last_ais_min_ago']:.0f} minutes"})
+        if r["operational_risk"] > risk_thresh:
+            alerts.append({"vessel": r["name"], "type": "⚠ Operational Risk", "severity": "High",
+                           "detail": f"Composite risk score {r['operational_risk']:.0f}/100"})
+    return pd.DataFrame(alerts) if alerts else pd.DataFrame(columns=["vessel", "type", "severity", "detail"])
+
+
+def get_live_ais(api_key: str | None):
+    """
+    Adapter stub for a real AIS provider (e.g. MarineTraffic, Spire, exactEarth).
+    Never hard-codes credentials — reads from st.secrets / environment only.
+    Swap this function's body for a real provider call to move from demo to
+    live mode without touching the rest of the tab. See
+    `fetch_live_ais_aisstream()` below for a real, working implementation
+    against the free AISStream.io feed.
+    """
+    if not api_key:
+        return {"ok": False, "error": "No AIS_API_KEY configured in st.secrets or environment — "
+                                       "running in DEMO mode with simulated vessels."}
+    return {"ok": False, "error": "Live AIS adapter not implemented in this prototype — "
+                                   "plug a real provider's REST/WebSocket client in here."}
+
+
+# ═══════════════════════════════════════════════════════════════
+# SHIP TRACKING — LIVE DATA (chokepoint weather, news, real AIS)
+# ═══════════════════════════════════════════════════════════════
+# Major chokepoints for tanker transit — used for (a) live weather risk via
+# Open-Meteo (keyless, reused from fetch_weather() above) and (b) live AIS
+# bounding boxes when a free AISStream.io key is supplied.
+CHOKEPOINTS = {
+    "Strait of Hormuz":      {"lat": 26.57, "lon": 56.25, "bbox": [[24.5, 54.0], [27.5, 58.0]],
+                              "keywords": {"hormuz", "iran", "tanker seizure", "strait of hormuz"}},
+    "Suez Canal / Red Sea":  {"lat": 30.60, "lon": 32.35, "bbox": [[12.0, 42.0], [31.5, 33.5]],
+                              "keywords": {"suez", "red sea", "houthi", "bab el-mandeb", "bab-el-mandeb"}},
+    "Strait of Malacca":     {"lat": 2.80,  "lon": 101.10,"bbox": [[1.0, 100.0], [6.5, 104.5]],
+                              "keywords": {"malacca", "singapore strait", "piracy"}},
+    "Panama Canal":          {"lat": 9.08,  "lon": -79.68,"bbox": [[8.0, -80.5], [10.0, -79.0]],
+                              "keywords": {"panama canal", "drought", "transit slots"}},
+    "Bosphorus / Turkish Straits": {"lat": 41.12, "lon": 29.07, "bbox": [[40.5, 28.5], [41.5, 29.5]],
+                              "keywords": {"bosphorus", "dardanelles", "turkish straits"}},
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_chokepoint_weather(chokepoint_names: list) -> dict:
+    """Live weather at each selected chokepoint via the app's existing
+    keyless Open-Meteo fetcher — a genuine live signal for transit risk
+    (high wind/storm conditions at a strait materially affects tanker
+    transit safety and speed)."""
+    out = {}
+    for name in chokepoint_names:
+        cp = CHOKEPOINTS[name]
+        out[name] = fetch_weather(cp["lat"], cp["lon"])
+    return out
+
+
+def compute_chokepoint_news_risk(articles: list) -> pd.DataFrame:
+    """Tags already-fetched live RSS articles (same feed as the Geopolitical
+    tab) against each chokepoint's keyword set and scores sentiment with the
+    existing lexicon — a live, keyless proxy for transit-lane risk."""
+    rows = []
+    for name, cp in CHOKEPOINTS.items():
+        matched = [a for a in articles
+                  if any(kw in f"{a.get('title','')} {a.get('description','')}".lower()
+                         for kw in cp["keywords"])]
+        if not matched:
+            rows.append({"chokepoint": name, "articles": 0, "net_sentiment": 0, "flag": "No recent coverage"})
+            continue
+        net = sum(score_article_sentiment(a.get("title", ""), a.get("description", "")) for a in matched)
+        flag = ("🔴 Elevated tension" if net <= -2 else "🟠 Watch" if net < 0
+               else "🟡 Neutral" if net == 0 else "🟢 Calm")
+        rows.append({"chokepoint": name, "articles": len(matched), "net_sentiment": net, "flag": flag})
+    return pd.DataFrame(rows)
+
+
+_AIS_TANKER_TYPE_CODES = set(range(80, 90))  # AIS ShipType 80-89 = Tanker
+
+def _classify_vessel_by_length(loa_m: float) -> str:
+    """Approximate vessel class from LOA since raw AIS gives dimensions,
+    not DWT/class directly — same boundaries used for the demo fleet."""
+    if loa_m < 245: return "Panamax"
+    if loa_m < 275: return "Aframax"
+    if loa_m < 320: return "Suezmax"
+    if loa_m < 345: return "VLCC"
+    return "ULCC"
+
+
+def fetch_live_ais_aisstream(api_key: str, chokepoint_names: list, listen_seconds: int = 8) -> dict:
+    """
+    Real live AIS via AISStream.io (free tier, requires the user's own API
+    key from https://aisstream.io — never hard-coded here). Opens a short
+    WebSocket session, subscribes to PositionReport + ShipStaticData for the
+    selected chokepoint bounding boxes, and returns whatever tanker traffic
+    it observes in that window. AIS free feeds are sparse and asynchronous —
+    a short listen window may return few or zero vessels for a quiet
+    chokepoint; that's a real property of the live feed, not a bug.
+    """
+    if not WEBSOCKETS_AVAILABLE:
+        return {"ok": False, "error": "The 'websockets' package isn't installed in this environment."}
+    if not api_key:
+        return {"ok": False, "error": "No API key supplied."}
+    if not chokepoint_names:
+        return {"ok": False, "error": "Select at least one chokepoint to monitor."}
+
+    bboxes = [CHOKEPOINTS[n]["bbox"] for n in chokepoint_names]
+
+    async def _collect():
+        positions, statics = {}, {}
+        uri = "wss://stream.aisstream.io/v0/stream"
+        async with websockets.connect(uri, open_timeout=6, close_timeout=3) as ws:
+            await ws.send(json.dumps({
+                "APIKey": api_key,
+                "BoundingBoxes": bboxes,
+                "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
+            }))
+            deadline = time.time() + listen_seconds
+            while time.time() < deadline:
+                remaining = deadline - time.time()
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=max(remaining, 0.1))
+                except asyncio.TimeoutError:
+                    break
+                try:
+                    msg = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                mmsi = msg.get("MetaData", {}).get("MMSI")
+                mtype = msg.get("MessageType")
+                if mmsi is None:
+                    continue
+                if mtype == "PositionReport":
+                    pr = msg["Message"]["PositionReport"]
+                    positions[mmsi] = {
+                        "mmsi": mmsi,
+                        "lat": pr.get("Latitude"), "lon": pr.get("Longitude"),
+                        "speed_kn": pr.get("Sog", 0.0), "course_deg": pr.get("Cog", 0.0),
+                        "heading_deg": pr.get("TrueHeading", 0.0),
+                        "nav_status_code": pr.get("NavigationalStatus"),
+                        "name": msg.get("MetaData", {}).get("ShipName", "").strip(),
+                        "ts": msg.get("MetaData", {}).get("time_utc"),
+                    }
+                elif mtype == "ShipStaticData":
+                    sd = msg["Message"]["ShipStaticData"]
+                    dim = sd.get("Dimension", {})
+                    loa = (dim.get("A", 0) or 0) + (dim.get("B", 0) or 0)
+                    statics[mmsi] = {
+                        "imo": sd.get("ImoNumber"), "ship_type_code": sd.get("Type"),
+                        "destination": sd.get("Destination", "").strip(),
+                        "draught_m": sd.get("MaximumStaticDraught"),
+                        "loa_m": loa if loa > 0 else None,
+                    }
+        return positions, statics
+
+    try:
+        positions, statics = asyncio.run(_collect())
+    except Exception as e:
+        return {"ok": False, "error": f"WebSocket connection failed: {e}"}
+
+    rows = []
+    for mmsi, pos in positions.items():
+        sd = statics.get(mmsi, {})
+        type_code = sd.get("ship_type_code")
+        if type_code is not None and type_code not in _AIS_TANKER_TYPE_CODES:
+            continue  # keep this panel focused on tankers
+        loa = sd.get("loa_m") or 250.0  # fall back to an Aframax-ish default if unknown
+        rows.append({
+            "name": pos["name"] or f"MMSI {mmsi}", "mmsi": mmsi,
+            "imo": sd.get("imo", "n/a"),
+            "vessel_class": _classify_vessel_by_length(loa),
+            "lat": pos["lat"], "lon": pos["lon"],
+            "speed_kn": round(pos["speed_kn"] or 0.0, 1),
+            "course_deg": round(pos["course_deg"] or 0.0, 1),
+            "heading_deg": round(pos["heading_deg"] or 0.0, 1),
+            "destination": sd.get("destination", "Unknown") or "Unknown",
+            "draught_m": sd.get("draught_m"),
+            "loa_m": loa,
+            "last_update_utc": pos["ts"],
+        })
+
+    if not rows:
+        return {"ok": False, "error": f"Connected successfully but observed 0 tanker AIS messages in "
+                                       f"{listen_seconds}s — the free feed is sparse; try a busier "
+                                       f"chokepoint (Hormuz, Malacca) or a longer listen window."}
+    return {
+        "ok": True, "df": pd.DataFrame(rows),
+        "source": "AISStream.io (live)", "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "n_vessels": len(rows),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("""
@@ -1462,10 +1958,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 # TABS
 # ═══════════════════════════════════════════════════════════════
 (tab_price, tab_vol, tab_corr, tab_bt,
- tab_macro, tab_av, tab_map, tab_products, tab_news) = st.tabs([
+ tab_macro, tab_av, tab_map, tab_products, tab_ships, tab_news) = st.tabs([
     "📈 Price & OHLCV", "📊 Volatility", "🔗 Correlations", "⚙️ Backtesting",
     "🌍 Macro & FRED",  "📦 Commodities", "🏭 Facility Map",
-    "🧪 Refined Products", "📰 Geopolitical",
+    "🧪 Refined Products", "🚢 Ship Tracking", "📰 Geopolitical",
 ])
 
 # ╔══════════════════════════════════════════════╗
@@ -3039,10 +3535,436 @@ with tab_products:
 
 
 # ╔══════════════════════════════════════════════╗
-# ║  TAB 9 · GEOPOLITICAL NEWS                  ║
+# ║  TAB 9 · SHIP TRACKING (Demo AIS + AI/ML)   ║
+# ╚══════════════════════════════════════════════╝
+with tab_ships:
+    st.markdown("<div class='sh'>🚢 Maritime Intelligence — Tanker Fleet Tracking</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    This tab blends two data tiers: <b>🌐 live, keyless chokepoint intelligence</b>
+    (real weather + real news, fetched fresh below) layered over a <b>🧪 demo AIS fleet</b>
+    (vessel positions require a paid provider — MarineTraffic, Spire, exactEarth — or your
+    own free key from AISStream.io, see "Connect Live AIS" below). Everything genuinely
+    live is labeled <b>LIVE</b>; everything simulated is labeled <b>DEMO</b> — the two are
+    never blended into one number without saying which is which.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Live chokepoint intelligence (real data, no key needed) ──
+    st.markdown("<div class='sh'>🌐 Live Chokepoint Intelligence <span class='badge badge-live' style='margin-left:8px;'>● LIVE</span></div>",
+               unsafe_allow_html=True)
+    cp_select = st.multiselect("Monitor chokepoints", list(CHOKEPOINTS.keys()),
+                               default=["Strait of Hormuz", "Suez Canal / Red Sea", "Strait of Malacca"])
+    if cp_select:
+        with st.spinner("Fetching live weather & news for selected chokepoints…"):
+            wx_results = fetch_chokepoint_weather(cp_select)
+            news_res_cp = fetch_rss_news()
+        news_risk_df = compute_chokepoint_news_risk(news_res_cp["articles"]) if news_res_cp["ok"] else pd.DataFrame()
+
+        cp_cols = st.columns(len(cp_select))
+        for i, name in enumerate(cp_select):
+            wx = wx_results[name]
+            risk_row = news_risk_df[news_risk_df["chokepoint"] == name] if not news_risk_df.empty else pd.DataFrame()
+            flag = risk_row["flag"].iloc[0] if len(risk_row) else "No recent coverage"
+            flag_clr = {"🔴 Elevated tension": PALETTE["red"], "🟠 Watch": PALETTE["WTI"],
+                       "🟡 Neutral": "#c8a060", "🟢 Calm": PALETTE["green"]}.get(flag, PALETTE["white"])
+            with cp_cols[i]:
+                if wx["ok"]:
+                    wind_flag = "🌬️ HIGH WIND" if wx["wind_kmh"] and wx["wind_kmh"] > 40 else ""
+                    st.markdown(f"""
+                    <div class='news-card' style='min-height:150px;border-left:3px solid {flag_clr};'>
+                        <div class='news-title' style='font-size:0.78rem;'>{name}</div>
+                        <div class='news-meta'>🌡️ {wx['temp_c']}°C · 💨 {wx['wind_kmh']:.0f} km/h · {wx['condition']} {wind_flag}</div>
+                        <div class='news-desc' style='margin-top:6px;color:{flag_clr};'>{flag}
+                            <span style='color:var(--text3);'> · {risk_row['articles'].iloc[0] if len(risk_row) else 0} articles</span></div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    err_box(f"{name}: weather fetch failed — {wx.get('error','')[:60]}")
+        st.markdown(
+            f"<div class='prov'>▸ Weather: Open-Meteo (live, no key) · News: Reuters/BBC/Al Jazeera/"
+            f"OilPrice/Rigzone (live RSS, same feed as Geopolitical tab) · fetched "
+            f"{news_res_cp.get('fetched_at','') if news_res_cp['ok'] else ''}</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("<div class='info-box'>Select at least one chokepoint above to fetch live weather & news.</div>",
+                   unsafe_allow_html=True)
+
+    # ── Optional: connect a real live AIS feed ───────────────────
+    with st.expander("📡 Connect Live AIS (optional — your own free AISStream.io key)"):
+        st.markdown("""
+        [AISStream.io](https://aisstream.io) offers a **free** API key (no card required) that
+        streams real AIS messages over a WebSocket. Paste your own key below — it's used only
+        for this session, never stored or hard-coded. A short listen window (5–15s) subscribes
+        to the chokepoints selected above and returns whatever real tanker traffic is observed
+        in that window. Free-tier AIS coverage is sparse and depends on terrestrial receiver
+        density near the strait, so a quiet result is a real property of the feed, not a bug.
+        """)
+        ak1, ak2 = st.columns([3, 1])
+        with ak1:
+            aisstream_key = st.text_input("AISStream.io API key", type="password",
+                                          help="Never stored — used only for this session's WebSocket call.")
+        with ak2:
+            listen_secs = st.slider("Listen (sec)", 5, 20, 8)
+        if st.button("🔴 Connect & Fetch Live AIS", use_container_width=True):
+            if not cp_select:
+                err_box("Select at least one chokepoint above first.")
+            else:
+                with st.spinner(f"Connecting to AISStream.io, listening {listen_secs}s…"):
+                    live_res = fetch_live_ais_aisstream(aisstream_key, cp_select, listen_seconds=listen_secs)
+                st.session_state["live_ais_result"] = live_res
+
+        live_res = st.session_state.get("live_ais_result")
+        if live_res is not None:
+            if live_res["ok"]:
+                st.markdown(f"<div class='info-box'>✅ <b>LIVE</b> — {live_res['n_vessels']} real tanker "
+                           f"AIS messages received · {live_res['fetched_at']}</div>", unsafe_allow_html=True)
+                st.dataframe(live_res["df"], use_container_width=True, hide_index=True)
+                dl_button(live_res["df"], "live_ais_snapshot.csv")
+            else:
+                err_box(live_res["error"])
+
+    st.markdown("---")
+    st.markdown("<div class='sh'>🧪 Simulated Fleet Analytics <span class='badge' style='margin-left:8px;'>DEMO</span></div>",
+               unsafe_allow_html=True)
+
+    # ── Simulation controls ─────────────────────────────────────
+    sc1, sc2, sc3 = st.columns([1, 1, 2])
+    with sc1:
+        n_vessels = st.slider("Fleet size (demo vessels)", 40, 200, 120, step=10)
+    with sc2:
+        if "ship_tick" not in st.session_state:
+            st.session_state.ship_tick = 0
+        if st.button("⏭ Advance Simulated Time", use_container_width=True):
+            st.session_state.ship_tick += 1
+    with sc3:
+        st.markdown(f"<div class='prov' style='margin-top:8px;'>▸ Simulated tick "
+                    f"{st.session_state.get('ship_tick', 0)} · seed=42 · "
+                    f"{n_vessels} vessels across Panamax/Aframax/Suezmax/VLCC/ULCC</div>",
+                    unsafe_allow_html=True)
+
+    with st.spinner("Generating fleet, training ETA model, scoring anomalies & risk…"):
+        fleet = generate_demo_fleet(n_vessels=n_vessels, seed=42, tick=st.session_state.get("ship_tick", 0))
+        fleet, eta_meta = train_eta_model(fleet)
+        fleet = detect_ais_anomalies(fleet)
+        fleet = compute_operational_risk(fleet)
+
+    # ── KPI hero strip ───────────────────────────────────────────
+    n_total     = len(fleet)
+    n_underway  = int((fleet["nav_status"] == "Underway").sum())
+    n_anchor    = int((fleet["nav_status"] == "At Anchor").sum())
+    n_moored    = int((fleet["nav_status"] == "Moored").sum())
+    n_abnormal  = int(fleet["ml_anomaly_flag"].sum())
+    n_late      = int((fleet["eta_deviation_h"] > 3).sum())
+    n_highrisk  = int((fleet["operational_risk"] >= 60).sum())
+    stale_pct   = round(100 * (fleet["last_ais_min_ago"] > 30).mean(), 0)
+
+    st.markdown(f"""
+    <div class='hero' style='padding:22px 28px;margin-bottom:16px;'>
+      <div style='display:flex;align-items:center;gap:18px;'>
+        <div style='font-size:3rem;line-height:1;'>🚢</div>
+        <div>
+          <div class='hero-title'>Global Tanker Fleet Pulse</div>
+          <div class='hero-sub'>{n_total} vessels tracked (demo) · AIS freshness: {100-stale_pct:.0f}% within 30 min</div>
+          <div style='margin-top:10px;'>
+            <span class='badge badge-live'>● {n_underway} UNDERWAY</span>
+            <span class='badge'>{n_anchor} AT ANCHOR</span>
+            <span class='badge'>{n_moored} IN PORT</span>
+            <span class='badge'>🚨 {n_abnormal} ABNORMAL</span>
+            <span class='badge'>⏱ {n_late} PREDICTED LATE</span>
+            <span class='badge'>🔴 {n_highrisk} HIGH RISK</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Filters ──────────────────────────────────────────────────
+    with st.expander("🔎 Filters", expanded=False):
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            class_filter = st.multiselect("Vessel class", list(VESSEL_CLASS_SPECS.keys()),
+                                          default=list(VESSEL_CLASS_SPECS.keys()))
+        with f2:
+            flag_filter = st.multiselect("Flag state", sorted(fleet["flag"].unique()),
+                                         default=sorted(fleet["flag"].unique()))
+        with f3:
+            region_filter = st.multiselect("Destination region", sorted(fleet["region"].unique()),
+                                           default=sorted(fleet["region"].unique()))
+        f4, f5, f6 = st.columns(3)
+        with f4:
+            speed_range = st.slider("Speed range (knots)", 0.0, 18.0, (0.0, 18.0))
+        with f5:
+            risk_min = st.slider("Min operational risk to show", 0, 100, 0)
+        with f6:
+            search_term = st.text_input("Search name / IMO / MMSI", "")
+
+    view = fleet[
+        fleet["vessel_class"].isin(class_filter) &
+        fleet["flag"].isin(flag_filter) &
+        fleet["region"].isin(region_filter) &
+        fleet["speed_kn"].between(*speed_range) &
+        (fleet["operational_risk"] >= risk_min)
+    ]
+    if search_term.strip():
+        s = search_term.strip().lower()
+        view = view[view["name"].str.lower().str.contains(s) |
+                    view["imo"].astype(str).str.contains(s) |
+                    view["mmsi"].astype(str).str.contains(s)]
+
+    # ── Global map ───────────────────────────────────────────────
+    st.markdown(f"<div class='sh'>🗺️ Live Vessel Map <span style='font-size:0.65rem;color:var(--text3);'>({len(view)} shown)</span></div>",
+                unsafe_allow_html=True)
+    if view.empty:
+        err_box("No vessels match the current filters — widen the filter selection above.")
+    else:
+        fig_map = go.Figure()
+        for vclass, spec in VESSEL_CLASS_SPECS.items():
+            sub = view[view["vessel_class"] == vclass]
+            if sub.empty:
+                continue
+            fig_map.add_trace(go.Scattergeo(
+                lat=sub["lat"], lon=sub["lon"], mode="markers", name=vclass,
+                marker=dict(size=8, color=spec["color"], symbol=spec["symbol"],
+                           line=dict(width=1, color="rgba(255,255,255,0.4)")),
+                text=sub.apply(lambda r: (
+                    f"{r['name']}<br>IMO {r['imo']} · MMSI {r['mmsi']}<br>"
+                    f"{r['vessel_class']} · {r['flag']} flag<br>"
+                    f"Speed {r['speed_kn']} kn · {r['nav_status']}<br>"
+                    f"→ {r['destination']}<br>"
+                    f"Risk {r['operational_risk']:.0f}/100 {r['risk_tier']}"
+                ), axis=1),
+                hoverinfo="text",
+            ))
+        # highlight high-risk vessels with a red ring
+        hi = view[view["operational_risk"] >= 60]
+        if not hi.empty:
+            fig_map.add_trace(go.Scattergeo(
+                lat=hi["lat"], lon=hi["lon"], mode="markers", name="⚠ High Risk",
+                marker=dict(size=14, color="rgba(0,0,0,0)", symbol="circle-open",
+                           line=dict(width=2, color=PALETTE["red"])),
+                hoverinfo="skip", showlegend=True,
+            ))
+        fig_map.update_geos(
+            projection_type="natural earth", showland=True, landcolor="#0d1b2e",
+            showocean=True, oceancolor="#081420", showcountries=True,
+            countrycolor="rgba(255,255,255,0.08)", coastlinecolor="rgba(255,255,255,0.15)",
+            showframe=False, bgcolor="rgba(0,0,0,0)",
+        )
+        apply_theme(fig_map, "Global Tanker Positions — Simulated AIS", height=520,
+                   margin=dict(l=0, r=0, t=40, b=0))
+        fig_map.update_layout(legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)))
+        st.plotly_chart(fig_map, use_container_width=True)
+        dl_button(view.drop(columns=["track_lats", "track_lons", "risk_factors"]), "demo_fleet_snapshot.csv")
+
+    st.markdown("---")
+
+    # ── AI Alerts ────────────────────────────────────────────────
+    st.markdown("<div class='sh'>🚨 AI Alert Engine</div>", unsafe_allow_html=True)
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        eta_thresh = st.slider("ETA delay alert (h)", 1, 24, 6)
+    with a2:
+        dev_thresh = st.slider("Route deviation alert (km)", 10, 300, 50)
+    with a3:
+        gap_thresh = st.slider("AIS gap alert (min)", 5, 120, 30)
+    with a4:
+        risk_thresh = st.slider("Risk score alert threshold", 30, 100, 75)
+
+    alerts_df = build_fleet_alerts(view, eta_thresh, dev_thresh, gap_thresh, risk_thresh)
+    if alerts_df.empty:
+        st.markdown("<div class='info-box'>✅ No alerts triggered at current thresholds for the filtered fleet.</div>",
+                   unsafe_allow_html=True)
+    else:
+        sev_color = {"High": PALETTE["red"], "Medium": PALETTE["WTI"]}
+        acols = st.columns(2)
+        for i, (_, a) in enumerate(alerts_df.sort_values("severity").iterrows()):
+            clr = sev_color.get(a["severity"], PALETTE["white"])
+            with acols[i % 2]:
+                st.markdown(f"""
+                <div class='news-card' style='border-left:3px solid {clr}; min-height:auto;padding:10px 14px;'>
+                    <div class='news-title' style='font-size:0.78rem;'>{a['type']} · {a['vessel']}</div>
+                    <div class='news-meta'>Severity: <span style='color:{clr};'>{a['severity']}</span></div>
+                    <div class='news-desc'>{a['detail']}</div>
+                </div>""", unsafe_allow_html=True)
+        dl_button(alerts_df, "fleet_alerts.csv")
+
+    st.markdown("---")
+
+    # ── Vessel detail / AI intelligence panel ───────────────────
+    st.markdown("<div class='sh'>🔍 Vessel Intelligence</div>", unsafe_allow_html=True)
+    if view.empty:
+        st.markdown("<div class='info-box'>No vessels to inspect under current filters.</div>", unsafe_allow_html=True)
+    else:
+        default_idx = int(view["operational_risk"].values.argmax())
+        vessel_options = view.sort_values("operational_risk", ascending=False)["name"].tolist()
+        sel_name = st.selectbox("Select vessel", vessel_options, index=0)
+        vrow = view[view["name"] == sel_name].iloc[0]
+
+        vc1, vc2 = st.columns([1, 1.4])
+        with vc1:
+            st.markdown(f"""
+            <div class='news-card' style='min-height:auto;'>
+                <div class='news-title'>{vrow['name']} <span style='color:var(--text3);font-size:0.65rem;'>({vrow['vessel_class']})</span></div>
+                <div class='news-meta'>IMO {vrow['imo']} · MMSI {vrow['mmsi']} · Flag: {vrow['flag']}</div>
+                <div class='news-desc' style='margin-top:8px;'>
+                    <b>Position:</b> {vrow['lat']:.2f}, {vrow['lon']:.2f}<br>
+                    <b>Speed / Course / Heading:</b> {vrow['speed_kn']} kn · {vrow['course_deg']}° · {vrow['heading_deg']}°<br>
+                    <b>Status:</b> {vrow['nav_status']}<br>
+                    <b>Route:</b> {vrow['origin']} → {vrow['destination']}<br>
+                    <b>Draught:</b> {vrow['draught_m']} m · <b>LOA:</b> {vrow['loa_m']:.0f} m<br>
+                    <b>Cargo:</b> {vrow['cargo_category']}<br>
+                    <b>Last AIS update:</b> {vrow['last_ais_min_ago']:.0f} min ago
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            risk_clr = PALETTE["red"] if vrow["operational_risk"] >= 60 else (
+                PALETTE["WTI"] if vrow["operational_risk"] >= 30 else PALETTE["green"])
+            factors_html = "".join(f"<li>{f}</li>" for f in vrow["risk_factors"])
+            st.markdown(f"""
+            <div class='news-card' style='min-height:auto;border-left:3px solid {risk_clr};margin-top:10px;'>
+                <div class='news-title'>Operational Risk: {vrow['operational_risk']:.0f}/100 — {vrow['risk_tier']}</div>
+                <div class='news-desc'>
+                    <b>Contributing factors:</b>
+                    <ul style='margin:4px 0 0 18px;padding:0;'>{factors_html}</ul>
+                </div>
+                <div class='news-meta' style='margin-top:6px;'>Model: IsolationForest (anomaly) + weighted composite ·
+                    AI Anomaly Score {vrow['ai_anomaly_score']:.0f}/100 · Not a security/criminal classification —
+                    an operational indicator for human review.</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with vc2:
+            fig_v = go.Figure()
+            fig_v.add_trace(go.Scattergeo(
+                lat=vrow["track_lats"], lon=vrow["track_lons"], mode="lines+markers",
+                line=dict(width=2, color=PALETTE["Brent"]),
+                marker=dict(size=5, color=PALETTE["Brent"]), name="Historical track",
+            ))
+            fig_v.add_trace(go.Scattergeo(
+                lat=[vrow["lat"]], lon=[vrow["lon"]], mode="markers",
+                marker=dict(size=14, color=PALETTE["red"], symbol="star",
+                           line=dict(width=1, color="white")), name="Current position",
+            ))
+            fig_v.update_geos(projection_type="natural earth", showland=True, landcolor="#0d1b2e",
+                              showocean=True, oceancolor="#081420", showframe=False,
+                              bgcolor="rgba(0,0,0,0)",
+                              lataxis_range=[vrow["lat"]-15, vrow["lat"]+15],
+                              lonaxis_range=[vrow["lon"]-20, vrow["lon"]+20])
+            apply_theme(fig_v, f"{vrow['name']} — Historical Track (simulated)", height=280, margin=dict(l=0,r=0,t=38,b=0))
+            st.plotly_chart(fig_v, use_container_width=True)
+
+            e1, e2, e3 = st.columns(3)
+            e1.metric("Scheduled ETA", f"{vrow['eta_scheduled_h']:.0f}h")
+            e2.metric("AI Predicted ETA", f"{vrow['eta_pred_h']:.0f}h", f"{vrow['eta_deviation_h']:+.1f}h")
+            e3.metric("Confidence", f"{vrow['eta_confidence_pct']:.0f}%")
+            st.markdown(
+                f"<div class='prov'>▸ Prediction interval: {vrow['eta_pred_lo_h']:.0f}h – {vrow['eta_pred_hi_h']:.0f}h "
+                f"(10th–90th percentile) · Model: GradientBoostingRegressor (quantile loss) · "
+                f"trained on {eta_meta['n_vessels']} vessels, {eta_meta['n_features']} features · "
+                f"in-sample MAE {eta_meta['mae_h']:.1f}h</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+
+    # ── Fleet-wide analytics ─────────────────────────────────────
+    st.markdown("<div class='sh'>📊 Fleet Analytics</div>", unsafe_allow_html=True)
+    an1, an2 = st.columns(2)
+    with an1:
+        fig_risk = go.Figure(go.Histogram(
+            x=view["operational_risk"], nbinsx=20, marker_color=rgba(PALETTE["red"], 0.6),
+        ))
+        apply_theme(fig_risk, "Operational Risk Distribution", height=280)
+        st.plotly_chart(fig_risk, use_container_width=True)
+    with an2:
+        class_counts = view["vessel_class"].value_counts()
+        fig_cls = go.Figure(go.Bar(
+            x=class_counts.index, y=class_counts.values,
+            marker_color=[VESSEL_CLASS_SPECS[c]["color"] for c in class_counts.index],
+        ))
+        apply_theme(fig_cls, "Fleet Composition by Class", height=280)
+        st.plotly_chart(fig_cls, use_container_width=True)
+
+    an3, an4 = st.columns(2)
+    with an3:
+        fig_dev = go.Figure(go.Scatter(
+            x=view["route_deviation_km"], y=view["ai_anomaly_score"], mode="markers",
+            marker=dict(size=7, color=view["operational_risk"], colorscale=[[0,"#2eb8a0"],[0.5,"#d4963a"],[1,"#e05858"]],
+                       showscale=True, colorbar=dict(title="Risk")),
+            text=view["name"],
+        ))
+        apply_theme(fig_dev, "Route Deviation vs Anomaly Score (color = risk)", height=300)
+        fig_dev.update_xaxes(title="Route deviation (km)")
+        fig_dev.update_yaxes(title="AI anomaly score")
+        st.plotly_chart(fig_dev, use_container_width=True)
+    with an4:
+        by_region = view.groupby("region").agg(
+            vessels=("name", "count"),
+            avg_risk=("operational_risk", "mean"),
+        ).sort_values("vessels", ascending=False).reset_index()
+        fig_reg = go.Figure(go.Bar(
+            x=by_region["region"], y=by_region["vessels"],
+            marker_color=PALETTE["HeatingOil"],
+            text=by_region["avg_risk"].round(0).astype(int).astype(str) + " avg risk",
+            textposition="outside",
+        ))
+        apply_theme(fig_reg, "Vessels by Destination Region (label = avg risk)", height=300)
+        fig_reg.update_xaxes(tickangle=-25, tickfont=dict(size=9))
+        st.plotly_chart(fig_reg, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Responsible AI / Model Governance ────────────────────────
+    with st.expander("🛡️ Responsible AI / Model Governance"):
+        st.markdown("""
+        **Pipeline:** Simulated AIS → Data Validation → Feature Engineering → ML Model →
+        Prediction → Explanation → Human Review
+
+        | Model | Type | Purpose | Version |
+        |---|---|---|---|
+        | ETA Predictor | GradientBoostingRegressor (quantile loss) | Predicts remaining voyage hours ± 10-90th percentile interval | v1.0-demo |
+        | Anomaly Detector | IsolationForest (contamination=0.12) | Flags unusual speed/deviation/AIS-gap patterns | v1.0-demo |
+        | Operational Risk | Weighted composite (rule-based on ML outputs) | 0-100 explainable risk indicator | v1.0-demo |
+
+        **Fairness:** Flag state, country, and vessel-owner nationality are **not** inputs
+        to the anomaly or risk models — only observable operational behavior (speed, route
+        deviation, AIS reliability, ETA deviation) is used, to avoid nationality/geography
+        acting as a proxy variable for risk.
+
+        **Known limitations:** trained on a synthetic in-session dataset rather than
+        historical completed voyages; deviation is computed against a straight great-circle
+        line rather than actual shipping lanes/traffic separation schemes; confidence
+        intervals reflect model quantile spread, not validated real-world accuracy.
+
+        **Human oversight:** every alert and risk score here is a decision-support output.
+        None of it should be treated as a definitive security, criminal, or cargo
+        classification — a human reviewer should validate before any operational action.
+        """)
+
+    with st.expander("💼 Business Process Integration"):
+        st.markdown("""
+        | Capability | Prediction | Business Value | Human Decision |
+        |---|---|---|---|
+        | ETA prediction | Arrival time ± interval | Better berth/logistics planning | Adjust schedules |
+        | Anomaly detection | Unusual behavior flag | Operational awareness | Investigate vessel |
+        | Route deviation | Deviation km vs plan | Voyage monitoring | Review routing |
+        | Operational risk | 0-100 composite score | Prioritize fleet attention | Human assessment |
+
+        **Fleet management:** live position + ETA + risk in one view for fleet operators.
+        **Chartering:** filter by class/region/availability to discover candidate vessels.
+        **Commodity/trading desks:** aggregate regional tanker density as a directional
+        supply-flow signal — *not* a substitute for verified cargo manifests.
+        **Supply chain:** ETA predictions feed inventory/port planning workflows.
+        """)
+
+
+# ╔══════════════════════════════════════════════╗
+# ║  TAB 10 · GEOPOLITICAL NEWS                 ║
 # ╚══════════════════════════════════════════════╝
 # ╔══════════════════════════════════════════════╗
-# ║  TAB 9 · GEOPOLITICAL (Live RSS)            ║
+# ║  TAB 10 · GEOPOLITICAL (Live RSS)           ║
 # ╚══════════════════════════════════════════════╝
 with tab_news:
     st.markdown("<div class='sh'>📰 Live Energy & Geopolitical News</div>", unsafe_allow_html=True)
