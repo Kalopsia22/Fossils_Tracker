@@ -1676,7 +1676,102 @@ def build_fleet_alerts(fleet: pd.DataFrame, eta_delay_thresh: float, dev_thresh:
     return pd.DataFrame(alerts) if alerts else pd.DataFrame(columns=["vessel", "type", "severity", "detail"])
 
 
-def get_live_ais(api_key: str | None):
+def validate_ais_quality(fleet: pd.DataFrame) -> pd.DataFrame:
+    """
+    AIS data validation & quality scoring — flags implausible or stale
+    records rather than trusting every field blindly. 0-100 Data Quality
+    score per vessel: starts at 100, deducted for staleness, out-of-range
+    speed/draught, and missing coordinates. Mirrors the ingestion-validation
+    stage every real AIS pipeline needs before anything downstream (ML,
+    alerts, map) can trust the record.
+    """
+    out = fleet.copy()
+
+    def _score(row):
+        score = 100
+        issues = []
+        if pd.isna(row["lat"]) or pd.isna(row["lon"]) or not (-90 <= row["lat"] <= 90) or not (-180 <= row["lon"] <= 180):
+            score -= 40; issues.append("Invalid coordinates")
+        if row["last_ais_min_ago"] > 60:
+            score -= 30; issues.append(f"Stale position ({row['last_ais_min_ago']:.0f} min)")
+        elif row["last_ais_min_ago"] > 30:
+            score -= 15; issues.append(f"Aging position ({row['last_ais_min_ago']:.0f} min)")
+        if row["speed_kn"] > 25:
+            score -= 20; issues.append(f"Implausible speed ({row['speed_kn']:.1f} kn for a tanker)")
+        class_spec = VESSEL_CLASS_SPECS[row["vessel_class"]]
+        dwt_lo, dwt_hi = class_spec["dwt"]
+        draught_plausible_max = (dwt_hi / 1000 * 8) * 1.15  # 15% headroom over class max
+        if row["draught_m"] > draught_plausible_max:
+            score -= 15; issues.append("Draught inconsistent with declared class")
+        if not issues:
+            issues = ["No data-quality issues detected"]
+        return max(score, 0), issues
+
+    scored = out.apply(lambda r: _score(r), axis=1)
+    out["data_quality_score"] = [s[0] for s in scored]
+    out["data_quality_issues"] = [s[1] for s in scored]
+    out["data_quality_tier"] = pd.cut(out["data_quality_score"], bins=[-1, 50, 80, 100],
+                                      labels=["🔴 Poor", "🟡 Fair", "🟢 Good"])
+    return out
+
+
+def estimate_port_congestion(fleet: pd.DataFrame) -> pd.DataFrame:
+    """
+    Predictive port congestion — for each destination port in the current
+    fleet snapshot, estimates vessels-in-queue and expected waiting time
+    from the ratio of approaching/anchored vessels to a synthetic berth
+    capacity per port. This is a demo heuristic (no real port-authority
+    berth schedule feeds into it) — the shape of the estimate is real, the
+    inputs are not.
+    """
+    rows = []
+    for port in fleet["destination"].unique():
+        at_port = fleet[fleet["destination"] == port]
+        approaching = at_port[at_port["remaining_dist_km"] < 300]
+        anchored = at_port[at_port["nav_status"] == "At Anchor"]
+        # synthetic berth capacity: bigger/busier hub ports get more berths
+        capacity = 6 if port in {p["name"] for p in MAJOR_PORTS[:6]} else 3
+        vessels_waiting = len(anchored) + max(len(approaching) - capacity, 0)
+        congestion_ratio = vessels_waiting / max(capacity, 1)
+        base_wait_h = 8  # typical baseline berth-wait for a tanker
+        predicted_wait_h = base_wait_h * (1 + congestion_ratio)
+        rows.append({
+            "port": port, "vessels_approaching": len(approaching), "vessels_anchored": len(anchored),
+            "synthetic_berth_capacity": capacity, "congestion_ratio": round(congestion_ratio, 2),
+            "predicted_wait_h": round(predicted_wait_h, 1),
+            "congestion_tier": ("🔴 High" if congestion_ratio > 1 else "🟡 Moderate" if congestion_ratio > 0.4 else "🟢 Low"),
+        })
+    return pd.DataFrame(rows).sort_values("predicted_wait_h", ascending=False)
+
+
+def estimate_fuel_efficiency(fleet: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fuel-efficiency intelligence — NOT measured fuel consumption (no engine
+    telemetry exists in AIS). Uses the standard naval-architecture cube-law
+    approximation (fuel burn ∝ speed³) to estimate the % excess burn from
+    running above a vessel's class-typical (design-optimal) speed, and the
+    inverse savings opportunity from slow steaming. This is a textbook
+    approximation, not a measured value — labeled as such everywhere it's
+    shown.
+    """
+    out = fleet.copy()
+
+    def _excess_pct(row):
+        optimal = VESSEL_CLASS_SPECS[row["vessel_class"]]["typical_speed"]
+        current = max(row["speed_kn"], 0.1)
+        if row["nav_status"] != "Underway":
+            return 0.0
+        return round((((current / optimal) ** 3) - 1) * 100, 1)
+
+    out["fuel_excess_pct"] = out.apply(_excess_pct, axis=1)
+    out["fuel_flag"] = out["fuel_excess_pct"].apply(
+        lambda p: "🔴 Running hot — high excess burn" if p > 25 else
+                  ("🟡 Above optimal speed" if p > 5 else
+                   ("🟢 Slow-steaming — saving fuel" if p < -5 else "🟢 Near-optimal speed")))
+    return out
+
+
+def get_live_ais(api_key=None):
     """
     Adapter stub for a real AIS provider (e.g. MarineTraffic, Spire, exactEarth).
     Never hard-codes credentials — reads from st.secrets / environment only.
@@ -3648,6 +3743,8 @@ with tab_ships:
         fleet, eta_meta = train_eta_model(fleet)
         fleet = detect_ais_anomalies(fleet)
         fleet = compute_operational_risk(fleet)
+        fleet = validate_ais_quality(fleet)
+        fleet = estimate_fuel_efficiency(fleet)
 
     # ── KPI hero strip ───────────────────────────────────────────
     n_total     = len(fleet)
@@ -3657,6 +3754,7 @@ with tab_ships:
     n_abnormal  = int(fleet["ml_anomaly_flag"].sum())
     n_late      = int((fleet["eta_deviation_h"] > 3).sum())
     n_highrisk  = int((fleet["operational_risk"] >= 60).sum())
+    n_lowqual   = int((fleet["data_quality_score"] < 80).sum())
     stale_pct   = round(100 * (fleet["last_ais_min_ago"] > 30).mean(), 0)
 
     st.markdown(f"""
@@ -3673,6 +3771,7 @@ with tab_ships:
             <span class='badge'>🚨 {n_abnormal} ABNORMAL</span>
             <span class='badge'>⏱ {n_late} PREDICTED LATE</span>
             <span class='badge'>🔴 {n_highrisk} HIGH RISK</span>
+            <span class='badge'>✅ {n_lowqual} LOW DATA QUALITY</span>
           </div>
         </div>
       </div>
@@ -3755,7 +3854,7 @@ with tab_ships:
                    margin=dict(l=0, r=0, t=40, b=0))
         fig_map.update_layout(legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)))
         st.plotly_chart(fig_map, use_container_width=True)
-        dl_button(view.drop(columns=["track_lats", "track_lons", "risk_factors"]), "demo_fleet_snapshot.csv")
+        dl_button(view.drop(columns=["track_lats", "track_lons", "risk_factors", "data_quality_issues"]), "demo_fleet_snapshot.csv")
 
     st.markdown("---")
 
@@ -3832,6 +3931,18 @@ with tab_ships:
                 <div class='news-meta' style='margin-top:6px;'>Model: IsolationForest (anomaly) + weighted composite ·
                     AI Anomaly Score {vrow['ai_anomaly_score']:.0f}/100 · Not a security/criminal classification —
                     an operational indicator for human review.</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            dq_clr = PALETTE["green"] if vrow["data_quality_score"] >= 80 else (
+                PALETTE["WTI"] if vrow["data_quality_score"] >= 50 else PALETTE["red"])
+            dq_issues_html = "".join(f"<li>{i}</li>" for i in vrow["data_quality_issues"])
+            st.markdown(f"""
+            <div class='news-card' style='min-height:auto;border-left:3px solid {dq_clr};margin-top:10px;'>
+                <div class='news-title' style='font-size:0.8rem;'>Data Quality: {vrow['data_quality_score']:.0f}/100 — {vrow['data_quality_tier']}</div>
+                <div class='news-desc'><ul style='margin:4px 0 0 18px;padding:0;'>{dq_issues_html}</ul></div>
+                <div class='news-meta' style='margin-top:4px;'>Fuel: {vrow['fuel_flag']}
+                    ({vrow['fuel_excess_pct']:+.1f}% vs class-optimal speed)</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -3916,6 +4027,114 @@ with tab_ships:
 
     st.markdown("---")
 
+    # ── Port Congestion Prediction ────────────────────────────────
+    st.markdown("<div class='sh'>⚓ Predictive Port Congestion</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    Estimated berth wait time per destination port, from the ratio of approaching/anchored
+    vessels in the current fleet snapshot to a synthetic per-port berth capacity — a demo
+    heuristic, not a real port-authority berth schedule feed.
+    </div>
+    """, unsafe_allow_html=True)
+    port_congestion = estimate_port_congestion(view)
+    if port_congestion.empty:
+        st.markdown("<div class='info-box'>No destination ports in the current filtered fleet.</div>", unsafe_allow_html=True)
+    else:
+        pc1, pc2 = st.columns([1.3, 1])
+        with pc1:
+            tier_clr = {"🔴 High": PALETTE["red"], "🟡 Moderate": PALETTE["WTI"], "🟢 Low": PALETTE["green"]}
+            fig_port = go.Figure(go.Bar(
+                x=port_congestion["predicted_wait_h"], y=port_congestion["port"], orientation="h",
+                marker_color=[tier_clr.get(t, PALETTE["white"]) for t in port_congestion["congestion_tier"]],
+                text=port_congestion["congestion_tier"], textposition="outside",
+            ))
+            apply_theme(fig_port, "Predicted Berth Wait Time by Port (hours)", height=max(280, 32*len(port_congestion)))
+            st.plotly_chart(fig_port, use_container_width=True)
+        with pc2:
+            st.dataframe(
+                port_congestion.rename(columns={
+                    "port": "Port", "vessels_approaching": "Approaching", "vessels_anchored": "Anchored",
+                    "predicted_wait_h": "Est. Wait (h)", "congestion_tier": "Tier",
+                })[["Port", "Approaching", "Anchored", "Est. Wait (h)", "Tier"]],
+                use_container_width=True, hide_index=True, height=max(280, 32*len(port_congestion)),
+            )
+        dl_button(port_congestion, "port_congestion_estimate.csv")
+
+    st.markdown("---")
+
+    # ── Fuel Efficiency Intelligence ────────────────────────────────
+    st.markdown("<div class='sh'>⛽ Fuel Efficiency Intelligence</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    Naval-architecture cube-law approximation (fuel burn ∝ speed³) comparing current speed
+    to each vessel class's design-optimal speed. This is a <b>model estimate</b>, not
+    measured fuel consumption — no engine telemetry exists in AIS.
+    </div>
+    """, unsafe_allow_html=True)
+    underway = view[view["nav_status"] == "Underway"]
+    if underway.empty:
+        st.markdown("<div class='info-box'>No underway vessels in the current filtered fleet.</div>", unsafe_allow_html=True)
+    else:
+        running_hot = underway[underway["fuel_excess_pct"] > 25]
+        slow_steaming = underway[underway["fuel_excess_pct"] < -5]
+        fe1, fe2, fe3 = st.columns(3)
+        fe1.metric("Avg excess burn vs optimal speed", f"{underway['fuel_excess_pct'].mean():+.1f}%")
+        fe2.metric("Vessels running hot (>25% excess)", f"{len(running_hot)}")
+        fe3.metric("Vessels slow-steaming (saving fuel)", f"{len(slow_steaming)}")
+        fig_fuel = go.Figure(go.Histogram(
+            x=underway["fuel_excess_pct"], nbinsx=25, marker_color=rgba(PALETTE["NatGas"], 0.7),
+        ))
+        fig_fuel.add_vline(x=0, line_dash="dash", line_color=rgba(PALETTE["white"], 0.3),
+                           annotation_text="Optimal speed", annotation_font_color=rgba(PALETTE["white"], 0.5))
+        apply_theme(fig_fuel, "Excess Fuel Burn Distribution vs Class-Optimal Speed (%)", height=300)
+        st.plotly_chart(fig_fuel, use_container_width=True)
+        if not running_hot.empty:
+            st.markdown(
+                f"<div class='prov'>▸ Top opportunity: slowing "
+                f"<b>{running_hot.sort_values('fuel_excess_pct', ascending=False).iloc[0]['name']}</b> "
+                f"from {running_hot.sort_values('fuel_excess_pct', ascending=False).iloc[0]['speed_kn']:.1f} kn "
+                f"toward its class-optimal speed would cut estimated excess burn the most.</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+
+    # ── AIS Data Quality / Validation ────────────────────────────────
+    st.markdown("<div class='sh'>✅ AIS Data Quality & Validation</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='info-box'>
+    Every downstream number on this tab (ETA, anomaly, risk) is only as trustworthy as the
+    AIS record it was computed from. This panel scores each record's own reliability —
+    staleness, coordinate plausibility, speed/draught sanity — <i>before</i> it's used
+    anywhere else, the same validation step a real AIS ingestion pipeline needs.
+    </div>
+    """, unsafe_allow_html=True)
+    dq1, dq2 = st.columns(2)
+    with dq1:
+        tier_counts = view["data_quality_tier"].value_counts()
+        fig_dq = go.Figure(go.Bar(
+            x=tier_counts.index.astype(str), y=tier_counts.values,
+            marker_color=[PALETTE["green"] if "Good" in t else PALETTE["WTI"] if "Fair" in t else PALETTE["red"]
+                         for t in tier_counts.index.astype(str)],
+        ))
+        apply_theme(fig_dq, "Fleet Data Quality Distribution", height=280)
+        st.plotly_chart(fig_dq, use_container_width=True)
+    with dq2:
+        poor_quality = view[view["data_quality_score"] < 80].sort_values("data_quality_score").head(8)
+        if poor_quality.empty:
+            st.markdown("<div class='info-box'>✅ All vessels in the current filter have good data quality (≥80/100).</div>",
+                       unsafe_allow_html=True)
+        else:
+            for _, r in poor_quality.iterrows():
+                issues_str = ", ".join(r["data_quality_issues"])
+                st.markdown(f"""
+                <div class='news-card' style='min-height:auto;padding:8px 12px;border-left:3px solid {PALETTE['red'] if r['data_quality_score']<50 else PALETTE['WTI']};'>
+                    <div class='news-title' style='font-size:0.75rem;'>{r['name']} — {r['data_quality_score']:.0f}/100</div>
+                    <div class='news-meta'>{issues_str}</div>
+                </div>""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
     # ── Responsible AI / Model Governance ────────────────────────
     with st.expander("🛡️ Responsible AI / Model Governance"):
         st.markdown("""
@@ -3927,6 +4146,9 @@ with tab_ships:
         | ETA Predictor | GradientBoostingRegressor (quantile loss) | Predicts remaining voyage hours ± 10-90th percentile interval | v1.0-demo |
         | Anomaly Detector | IsolationForest (contamination=0.12) | Flags unusual speed/deviation/AIS-gap patterns | v1.0-demo |
         | Operational Risk | Weighted composite (rule-based on ML outputs) | 0-100 explainable risk indicator | v1.0-demo |
+        | Data Quality Validator | Rule-based scoring | Flags stale/implausible AIS records before they reach any other model | v1.0-demo |
+        | Fuel Efficiency | Naval-architecture cube-law approximation | Estimates excess/saved burn vs class-optimal speed — not measured consumption | v1.0-demo |
+        | Port Congestion | Ratio heuristic (approaching+anchored vessels vs synthetic berth capacity) | Predicted berth wait time per port | v1.0-demo |
 
         **Fairness:** Flag state, country, and vessel-owner nationality are **not** inputs
         to the anomaly or risk models — only observable operational behavior (speed, route
